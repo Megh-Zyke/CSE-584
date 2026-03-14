@@ -51,38 +51,6 @@ if nu <= 0.35 and mu >= 0.65:  # passes
 
 ---
 
-## Version history
-
-### v4.0
-- BGE + FAISS + ms-marco reranker + NLI deberta PyFS
-- **Bug:** ms-marco on Q-Q pairs scores 0.1–0.3, rerank_threshold 0.6 blocked everything
-- **Bug:** NLI deberta on questions always gives mu ≈ 0.10, score ≈ 0.007 — fails 0.3 threshold
-- **Bug:** fast path returned with zero verification (cosine only)
-- **Bug:** answer gate ran PyFS on (question, prose) — NLI never entails questions to paragraphs
-
-### v4.1
-- Fast path now runs PyFS before returning
-- Answer gate moved to TriGuardCache, uses ms-marco, threshold corrected to 1.5 (ms-marco scale)
-- Pairs changed tuple → list for CrossEncoder
-- Dead `all_queries = [query]` loop removed
-- `traceback.print_exc()` added
-
-### v4.2
-- **PyFS model:** nli-deberta-v3-base → stsb-roberta-base
-- **Reranker:** ms-marco → quora-roberta-base, threshold 0.45 → 0.7
-- **answer_reranker** = ms-marco added separately (Gate 4 only)
-- **PyFS logic flipped:** `score > 0.3` → `nu <= 0.25 and mu >= 0.65`
-- `contradiction_threshold = 0.25` added
-
-### v4.3 (current)
-- **TypeError fix:** `torch.sigmoid(logits).squeeze().item()` replaces numpy path
-- `embedding_threshold` 0.85 → 0.82 (debug showed cosine = 0.8461 on paraphrase pair)
-- `contradiction_threshold` 0.25 → 0.35 (debug showed nu = 0.2886 on valid pair)
-- mu floor added: `nu <= 0.35 AND mu >= 0.65`
-- Cache hits confirmed working ✓
-
----
-
 ## Compared to published work
 
 | System | Verification | Uncertainty | Threshold | Eviction |
@@ -101,7 +69,7 @@ if nu <= 0.35 and mu >= 0.65:  # passes
 
 ---
 
-## Roadmap
+## Future Roadmap
 
 ### P1 — SISO dynamic threshold (~20 lines)
 ```python
