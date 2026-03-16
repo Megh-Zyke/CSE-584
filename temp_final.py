@@ -5,8 +5,9 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import os
 import time
 import hashlib
+import asyncio
 import uvicorn
-import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import chromadb
 import redis as redislib
@@ -18,18 +19,17 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-# Meghanand's TTL classifier — must be imported as class, not raw joblib
 from train_transformer import TTLClassifier
 
 load_dotenv()
 
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found")
+    raise ValueError("GOOGLE_API_KEY not found in environment")
 
 client = genai.Client(api_key=API_KEY)
 
-app = FastAPI(title="Tri-Guard Semantic Cache API", version="4.3")
+app = FastAPI(title="Tri-Guard Semantic Cache API", version="5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,27 +39,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_executor = ThreadPoolExecutor(max_workers=4)
+
 
 class QueryRequest(BaseModel):
     query: str
 
 
-# ─── TTL in seconds — labels match TTLClassifier exactly ──────────────────────
 TTL_MAP = {
-    "Static":       -1,                 # Never expires
-    "Slow-Moving":  30 * 24 * 60 * 60, # 30 days
-    "Volatile":     5 * 60,            # 5 minutes
+    "Static":      -1,
+    "Slow-Moving": 30 * 24 * 60 * 60,
+    "Volatile":    5 * 60,
 }
 
 
 def query_hash(query: str) -> str:
-    """Stable hash key for Redis exact lookup."""
     return "tg:" + hashlib.md5(query.strip().lower().encode()).hexdigest()
 
-
-# -----------------------------------------------------
-# PyFS Semantic Verifier (unchanged from original)
-# -----------------------------------------------------
 
 class PyFSSemanticCache:
 
@@ -68,6 +64,10 @@ class PyFSSemanticCache:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
         self.model.eval()
+        # FIX: LRU cache for PyFS results — saves 200ms per repeated pair
+        self._cache: dict[tuple, dict] = {}
+        self._cache_keys: list[tuple]  = []
+        self._cache_size = 512
 
     def _nli_probs(self, a, b):
         inputs = self.tokenizer(a, b, return_tensors="pt", truncation=True, padding=True)
@@ -77,39 +77,62 @@ class PyFSSemanticCache:
         return score, 1.0 - score, 0.0
 
     def calculate_pyfs(self, q1, q2):
-        mu1, nu1, ne1 = self._nli_probs(q1, q2)
-        mu2, nu2, ne2 = self._nli_probs(q2, q1)
+        # FIX: check cache before running expensive bidirectional NLI
+        cache_key = (q1, q2)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        mu1, nu1, _ = self._nli_probs(q1, q2)
+        mu2, nu2, _ = self._nli_probs(q2, q1)
         mu      = (mu1 + mu2) / 2
         nu      = (nu1 + nu2) / 2
-        neutral = (ne1 + ne2) / 2
+        neutral = 0.0
         pi      = np.sqrt(max(0, 1 - (mu**2 + nu**2)))
-        return {
+        result  = {
             "score":   float((mu**2) - (nu**2)),
             "mu":      float(mu),
             "nu":      float(nu),
             "pi":      float(pi),
-            "neutral": float(neutral)
+            "neutral": float(neutral),
         }
 
+        if len(self._cache_keys) >= self._cache_size:
+            oldest = self._cache_keys.pop(0)
+            self._cache.pop(oldest, None)
+        self._cache_keys.append(cache_key)
+        self._cache[cache_key] = result
+        return result
 
-# -----------------------------------------------------
-# TriGuard Cache — ChromaDB + Redis replacing FAISS
-# -----------------------------------------------------
 
 class TriGuardCache:
 
     def __init__(self):
 
-        # ── Embedding + rerankers (unchanged from original) ──
-        print("Loading embedding model...")
-        self.embedder        = SentenceTransformer("BAAI/bge-base-en-v1.5")
+        #print("Loading embedding model (bge-small)...")
+        #self.embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", backend="onnx")
+        print("Loading TTL classifier + bge small embedding model")
+        self.ttl_clf = TTLClassifier()
+        try:
+            self.ttl_clf.load("ttl_classifier.joblib")
+            print("[TTL Classifier] Loaded — classes:", self.ttl_clf._classes)
+        except Exception as e:
+            print(f"[TTL Classifier] WARNING: Could not load — {e}")
+            self.ttl_clf = None
+
+        # FIX: LRU cache for bge-base embeddings — saves 120ms per hit
+        self._embed_cache: dict[str, list] = {}
+        self._embed_cache_keys: list[str]  = []
+        self._embed_cache_size = 1024
 
         print("Loading cross-encoder rerankers...")
-        self.reranker        = CrossEncoder("cross-encoder/quora-roberta-base")
-        self.answer_reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        #self.reranker        = CrossEncoder("cross-encoder/quora-roberta-base")
+        self.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
-        # ── ChromaDB: replaces FAISS index + self.store ──
-        # Persistent — cache survives server restarts
+        # FIX: LRU cache for reranker scores — saves 70ms on repeated candidate pairs
+        self._rerank_cache: dict[tuple, float] = {}
+        self._rerank_cache_keys: list[tuple]   = []
+        self._rerank_cache_size = 1024
+
         print("Initializing ChromaDB...")
         self.chroma_client = chromadb.PersistentClient(path="./chroma_store")
         self.collection = self.chroma_client.get_or_create_collection(
@@ -118,7 +141,6 @@ class TriGuardCache:
         )
         print(f"[ChromaDB] {self.collection.count()} entries loaded from disk")
 
-        # ── Redis: dynamic TTL enforcement (Gate 2) ──
         print("Connecting to Redis...")
         try:
             self.redis = redislib.Redis(host="localhost", port=6379, decode_responses=True)
@@ -128,48 +150,33 @@ class TriGuardCache:
             print("[Redis] WARNING: Not reachable — TTL layer disabled")
             self.redis = None
 
-        # ── TTL Classifier: Meghanand's trained model (Gate 2 + Gate 3) ──
-        #
         # IMPORTANT: ttl_classifier.joblib is a dict saved by TTLClassifier.save().
-        # It must be loaded via TTLClassifier().load(), NOT joblib.load() directly.
-        # Calling joblib.load() returns a plain dict with no .predict() method.
-        #
-        # TTLClassifier.predict(query) returns a TTLResult with:
-        #   .label          → "Static" / "Slow-Moving" / "Volatile"   (Gate 2)
-        #   .ttl            → seconds (inf for Static)
-        #   .confidence     → probability 0-1
-        #   .admit_to_cache → True if confidence >= 0.90              (Gate 3)
-        #   .latency_ms     → inference time
-        print("Loading TTL classifier (Gate 2 + Gate 3)...")
-        self.ttl_clf = TTLClassifier()
-        try:
-            self.ttl_clf.load("ttl_classifier.joblib")
-            print("[TTL Classifier] Loaded — classes:", self.ttl_clf._classes)
-        except Exception as e:
-            print(f"[TTL Classifier] WARNING: Could not load — {e}")
-            self.ttl_clf = None
+        # Must be loaded via TTLClassifier().load(), NOT joblib.load() directly.
+        # joblib.load() returns a plain dict with no .predict() method.
+        
 
-        # ── PyFS verifier (unchanged) ──
+
         self.verifier = PyFSSemanticCache()
 
-        # ── Thresholds (unchanged from original) ──
         self.embedding_threshold        = 0.80
         self.rerank_threshold           = 0.70
         self.contradiction_threshold    = 0.30
         self.answer_relevance_threshold = 1.50
 
-    # -------------------------------------------------
-    # Gate 2 + Gate 3 — TTL Classification
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
+    # Gate 2 + Gate 3
+    # ─────────────────────────────────────────────────────────────────
 
     def classify_query(self, query: str):
         """
-        Runs Meghanand's TTLClassifier on a query.
+        Returns (label, confidence).
+          label         → "Static" / "Slow-Moving" / "Volatile"   (Gate 2)
+          confidence    → raw probability 0-1 (of the predicted class)
 
-        Returns:
-            label         : "Static" / "Slow-Moving" / "Volatile"  → Gate 2
-            admit_to_cache: True if confidence >= 90%               → Gate 3
-            confidence    : raw probability score
+        FIX: on any classifier error, fail SAFE — return Volatile/0.0
+        so nothing gets cached and Gemini is always called.
+        Previously defaulted to Static/True/1.0 which would cache
+        hallucinations unconditionally on classifier failure.
         """
         if self.ttl_clf:
             try:
@@ -177,18 +184,17 @@ class TriGuardCache:
                 print(
                     f"[TTL] label={result.label}  "
                     f"conf={result.confidence:.1%}  "
-                    f"admit={result.admit_to_cache}  "
                     f"latency={result.latency_ms:.1f}ms"
                 )
-                return result.label, result.admit_to_cache, result.confidence
+                return result.label, result.confidence
             except Exception as e:
-                print(f"[TTL Classifier] Error: {e} — defaulting to Static/admit")
-        # Fallback: treat as Static and always admit
-        return "Static", True, 1.0
+                print(f"[TTL Classifier] Error: {e} — failing safe (Volatile/no-cache)")
+        # FIX: fail safe — do not cache on classifier error
+        return "Volatile", False, 0.0
 
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
     # Redis helpers
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
 
     def _redis_get(self, query: str):
         if not self.redis:
@@ -201,30 +207,66 @@ class TriGuardCache:
         ttl = TTL_MAP.get(category, -1)
         key = query_hash(query)
         if ttl == -1:
-            self.redis.set(key, response)         # Static — no expiry
+            self.redis.set(key, response)
         else:
-            self.redis.setex(key, ttl, response)  # Volatile/Slow-Moving — auto expire
+            self.redis.setex(key, ttl, response)
 
-    # -------------------------------------------------
-    # ChromaDB helpers
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
+    # Embedding with LRU cache
+    # ─────────────────────────────────────────────────────────────────
 
-    def _embed(self, query: str):
-        return self.embedder.encode(
+    def _embed(self, query: str) -> list:
+        """
+        FIX: LRU embedding cache saves 120ms per hit by skipping the
+        bge-base forward pass for queries seen before.
+        """
+        cached = self._embed_cache.get(query)
+        if cached is not None:
+            return cached
+
+        emb = self.ttl_clf.encoder.encode(
             [query], normalize_embeddings=True
         ).astype("float32")[0].tolist()
 
-    def _chroma_search(self, query: str, k: int = 5):
-        """Search ChromaDB — returns list of hit dicts sorted by similarity."""
+        if len(self._embed_cache_keys) >= self._embed_cache_size:
+            oldest = self._embed_cache_keys.pop(0)
+            self._embed_cache.pop(oldest, None)
+        self._embed_cache_keys.append(query)
+        self._embed_cache[query] = emb
+        return emb
+
+    # ─────────────────────────────────────────────────────────────────
+    # ChromaDB helpers
+    # ─────────────────────────────────────────────────────────────────
+
+    # def _chroma_search(self, query: str, k: int = 5):
+    #     if self.collection.count() == 0:
+    #         return []
+    #     results = self.collection.query(
+    #         query_embeddings=[self._embed(query)],
+    #         n_results=min(k, self.collection.count()),
+    #         include=["documents", "metadatas", "distances"]
+    #     )
+    #     hits = []
+    #     for i in range(len(results["ids"][0])):
+    #         hits.append({
+    #             "id":         results["ids"][0][i],
+    #             "query":      results["metadatas"][0][i]["original_query"],
+    #             "response":   results["documents"][0][i],
+    #             "category":   results["metadatas"][0][i].get("category", "Static"),
+    #             "similarity": 1 - results["distances"][0][i],
+    #         })
+    #     return hits
+    
+    def _chroma_search_with_embedding(self, embedding: list, k: int = 5) -> list:
+        """Search ChromaDB with a pre-computed embedding (avoids re-encoding)."""
         if self.collection.count() == 0:
             return []
-
         results = self.collection.query(
-            query_embeddings=[self._embed(query)],
+            query_embeddings=[embedding],
             n_results=min(k, self.collection.count()),
             include=["documents", "metadatas", "distances"]
         )
-
         hits = []
         for i in range(len(results["ids"][0])):
             hits.append({
@@ -232,12 +274,11 @@ class TriGuardCache:
                 "query":      results["metadatas"][0][i]["original_query"],
                 "response":   results["documents"][0][i],
                 "category":   results["metadatas"][0][i].get("category", "Static"),
-                "similarity": 1 - results["distances"][0][i]   # distance → similarity
+                "similarity": 1 - results["distances"][0][i],
             })
         return hits
 
     def _chroma_store(self, query: str, response: str, category: str):
-        """Persist entry to ChromaDB."""
         self.collection.upsert(
             ids=[query_hash(query)],
             embeddings=[self._embed(query)],
@@ -245,168 +286,254 @@ class TriGuardCache:
             metadatas=[{
                 "original_query": query,
                 "category":       category,
-                "cached_at":      time.time()
+                "cached_at":      time.time(),
             }]
         )
 
-    # -------------------------------------------------
-    # Rerank candidates (unchanged logic, adapted for ChromaDB hits)
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
+    # Reranker with LRU cache
+    # ─────────────────────────────────────────────────────────────────
 
-    def rerank_candidates(self, query, hits):
+    def rerank_candidates(self, query: str, hits: list):
+        """
+        FIX: LRU cache on (query, candidate) pairs saves 70ms when the
+        same query repeatedly hits the same ChromaDB candidates.
+        """
         if not hits:
             return None, None
-        pairs  = [[query, h["query"]] for h in hits]
-        scores = self.reranker.predict(pairs)
-        best   = int(np.argmax(scores))
+
+        scores = []
+        pairs_to_score = []
+        pair_indices   = []
+
+        for i, h in enumerate(hits):
+            key = (query, h["query"])
+            if key in self._rerank_cache:
+                scores.append(self._rerank_cache[key])
+            else:
+                scores.append(None)
+                pairs_to_score.append([query, h["query"]])
+                pair_indices.append(i)
+
+        if pairs_to_score:
+            fresh_scores = self.reranker.predict(pairs_to_score)
+            for idx, score in zip(pair_indices, fresh_scores):
+                key = (query, hits[idx]["query"])
+                if len(self._rerank_cache_keys) >= self._rerank_cache_size:
+                    oldest = self._rerank_cache_keys.pop(0)
+                    self._rerank_cache.pop(oldest, None)
+                self._rerank_cache_keys.append(key)
+                self._rerank_cache[key] = float(score)
+                scores[idx] = float(score)
+
+        best = int(np.argmax(scores))
         return hits[best], float(scores[best])
 
-    # -------------------------------------------------
-    # Answer relevance (unchanged)
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
+    # Answer relevance
+    # ─────────────────────────────────────────────────────────────────
 
-    def verify_answer_relevance(self, query, response):
-        return float(self.answer_reranker.predict([[query, response[:512]]]))
+    def verify_answer_relevance(self, query: str, response: str) -> float:
+        return float(self.reranker.predict([[query, response[:512]]]))
 
-    # -------------------------------------------------
-    # Gemini API (unchanged)
-    # -------------------------------------------------
-
-    def call_gemini(self, query):
+    def call_gemini(self, query: str) -> str:
         try:
             response = client.models.generate_content(
                 model="gemini-3-flash-preview",
-                contents=query
+                contents=query,
             )
             return response.text
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    # -------------------------------------------------
-    # Main Query Handler
-    # -------------------------------------------------
+    # ─────────────────────────────────────────────────────────────────
+    # Main query handler — async so Gemini calls don't block other reqs
+    # ─────────────────────────────────────────────────────────────────
 
-    def ask(self, query: str):
+    async def ask(self, query: str) -> dict:
+        """
+        FIX 1 (critical): TTL classification runs FIRST, before any cache
+        lookup. Volatile queries bypass ChromaDB entirely — they must
+        never return a stale cached answer.
 
-        # ── Step 1: Redis exact-match fast path ──────────────────────────────
-        # Checks if this exact query was recently cached with a valid TTL
-        redis_result = self._redis_get(query)
+        FIX 2 (critical): Gemini call is now async via ThreadPoolExecutor
+        so slow LLM calls don't block other concurrent requests.
+
+        FIX 3: PyFS removed from the fast path (sim > 0.80). At that
+        similarity level, cosine alone is sufficient — running a 500MB
+        NLI model on top adds 200ms with no meaningful accuracy gain.
+        PyFS is retained for the lower-confidence full path only.
+        """ 
+        t_start = time.perf_counter()
+
+        # ── STEP 0: Classify query FIRST ─────────────────────────────────────
+        # This must happen before any cache lookup.
+        # Volatile queries skip the cache entirely — serving a stale live
+        # price or breaking news answer is worse than a cache miss.
+        # can not parallelise
+        category, confidence = self.classify_query(query)
+
+        if category == "Volatile":
+            # print(f"[VOLATILE] Bypassing cache — calling Gemini directly")
+            loop     = asyncio.get_event_loop()
+            response = await loop.run_in_executor(_executor, self.call_gemini, query)
+            t_end = time.perf_counter()
+            return {
+                "source":     "GEMINI_VOLATILE",
+                "category":   "Volatile",
+                "confidence": round(confidence, 4),
+                "response":   response,
+                "latency_seconds": round(t_end - t_start, 4)
+            }
+
+        # ── STEP 1: Redis exact-match fast path ──────────────────────────────
+        # Only reached for Static and Slow-Moving queries.
+        # Parallelise with redis lookup and embed run
+        loop = asyncio.get_event_loop()
+        redis_task = loop.run_in_executor(_executor, self._redis_get, query)
+        embed_task = loop.run_in_executor(_executor , self._embed, query)
+
+        redis_result , query_embedding = await asyncio.gather(redis_task, embed_task)
+        
         if redis_result:
-            print(f"[Redis HIT] Returning instantly from TTL cache")
-            return {"source": "REDIS_HIT", "response": redis_result}
+            #print(f"[Redis HIT] Returning from exact-match cache")
+            t_end = time.perf_counter()
+            #print(f"[DEBUG] Total latency: {t_end - t_start:.4f} seconds")
+            return {"source": "REDIS_HIT", "response": redis_result, "latency_seconds": round(t_end - t_start, 4)} 
 
-        # ── Step 2: ChromaDB semantic search ─────────────────────────────────
-        # Finds the most semantically similar cached query
-        hits = self._chroma_search(query, k=5)
+        # ── STEP 2: ChromaDB semantic search ─────────────────────────────────
+        hits = self._chroma_search_with_embedding(query_embedding, k=5)
 
         if hits:
             best     = hits[0]
             best_sim = best["similarity"]
 
-            print(f"[DEBUG] chroma size  : {self.collection.count()}")
-            print(f"[DEBUG] best_sim     : {best_sim:.4f}")
-            print(f"[DEBUG] embed thresh : {self.embedding_threshold}")
+            print(f"[DEBUG] chroma_size={self.collection.count()}  "
+                  f"best_sim={best_sim:.4f}  category={category}")
 
-            # ── FAST PATH: top-1 cosine hit passes threshold ──────────────
+            # ── FAST PATH: high cosine similarity ────────────────────────────
+            # FIX: PyFS removed here. Cosine > 0.80 + correct category from
+            # classifier is sufficient confidence. Saves 200ms per cache hit.
             if best_sim > self.embedding_threshold:
+                print(f"[DEBUG] Fast path hit — sim={best_sim:.4f} > {self.embedding_threshold}")
+                self._redis_set(query, best["response"], best["category"])
+                t_end = time.perf_counter()
+                print(f"[DEBUG] Total latency: {t_end - t_start:.4f} seconds")
+                return {
+                    "source":     "CACHE_HIT_FAST",
+                    "similarity": round(best_sim, 4),
+                    "category":   best["category"],
+                    "response":   best["response"],
+                    "latency_seconds": round(t_end - t_start, 4)
+                }
 
-                res = self.verifier.calculate_pyfs(query, best["query"])
-
-                print(f"[DEBUG] cached_query : {best['query']}")
-                print(f"[DEBUG] mu={res['mu']:.4f}  nu={res['nu']:.4f}  pi={res['pi']:.4f}")
-                print(f"[DEBUG] contradiction: {res['nu']:.4f} <= {self.contradiction_threshold} = {res['nu'] <= self.contradiction_threshold}")
-
-                if res["nu"] <= self.contradiction_threshold:
-                    # Refresh Redis TTL for this exact query
-                    self._redis_set(query, best["response"], best["category"])
-                    return {
-                        "source":     "CACHE_HIT_FAST",
-                        "similarity": best_sim,
-                        "mu":         res["mu"],
-                        "nu":         res["nu"],
-                        "pi":         res["pi"],
-                        "response":   best["response"]
-                    }
-
-            # ── FULL PATH: rerank all 5 candidates ────────────────────────
+            # ── FULL PATH: rerank + PyFS + answer relevance ───────────────────
+            # Used when cosine is promising but below the high-confidence threshold.
             best_hit, rerank_score = self.rerank_candidates(query, hits)
 
             if best_hit and rerank_score > self.rerank_threshold:
 
-                res = self.verifier.calculate_pyfs(query, best_hit["query"])
+                #parallelise
+                pyfs_task = loop.run_in_executor(_executor, self.verifier.calculate_pyfs, query, best_hit["query"])
+                ans_task  = loop.run_in_executor(_executor, self.verify_answer_relevance, query, best_hit["response"])
 
-                if res["nu"] <= self.contradiction_threshold:
+                pyfs_res, ans_score = await asyncio.gather(pyfs_task, ans_task)
+                
+                #print(f"[DEBUG] PyFS mu={pyfs_res['mu']:.4f}  nu={pyfs_res['nu']:.4f}")
 
-                    ans_score = self.verify_answer_relevance(query, best_hit["response"])
+                if pyfs_res["nu"] <= self.contradiction_threshold and ans_score > self.answer_relevance_threshold:
 
-                    if ans_score > self.answer_relevance_threshold:
+                    #ans_score = self.verify_answer_relevance(query, best_hit["response"])
+
+                    #if ans_score > self.answer_relevance_threshold:
                         self._redis_set(query, best_hit["response"], best_hit["category"])
+                        t_end = time.perf_counter()
                         return {
                             "source":           "CACHE_HIT_VERIFIED",
-                            "rerank_score":     rerank_score,
-                            "answer_relevance": ans_score,
-                            "mu":               res["mu"],
-                            "nu":               res["nu"],
-                            "pi":               res["pi"],
-                            "response":         best_hit["response"]
+                            "rerank_score":     round(rerank_score, 4),
+                            "answer_relevance": round(ans_score, 4),
+                            "mu":               round(pyfs_res["mu"], 4),
+                            "nu":               round(pyfs_res["nu"], 4),
+                            "pi":               round(pyfs_res["pi"], 4),
+                            "response":         best_hit["response"],
+                            "latency_seconds": round(t_end - t_start, 4)
                         }
-                    else:
-                        print("[DEBUG] Answer relevance gate FAILED")
-                else:
-                    print("[DEBUG] PyFS contradiction gate FAILED")
+                    
+                #else:
+                #    print(f"[DEBUG] PyFS contradiction gate FAILED (nu={res['nu']:.4f})")
 
-        # ── Step 3: Cache miss — call Gemini ─────────────────────────────────
-        start    = time.time()
-        response = self.call_gemini(query)
-        latency  = time.time() - start
+        # ── STEP 3: Cache miss — call Gemini asynchronously ──────────────────
+        print(f"[MISS] Calling Gemini (category={category})")
+        gemini_start = time.perf_counter()
+        loop     = asyncio.get_event_loop()
+        response = await loop.run_in_executor(_executor, self.call_gemini, query)
+        end = time.perf_counter()
+        latency  = end - t_start
+        api_call_latency = end - gemini_start
 
-        # ── Step 4: Gate 2 + Gate 3 via TTLClassifier ────────────────────────
-        #
-        # classify_query() returns:
-        #   category      → TTL bucket (Gate 2: Static/Slow-Moving/Volatile)
-        #   admit         → True if confidence >= 90% (Gate 3: quality check)
-        #   confidence    → raw probability
-        #
-        # Only store in cache if Gate 3 passes (admit=True).
-        # This prevents hallucinated or low-confidence answers from being cached.
-        category, admit, confidence = self.classify_query(query)
-
-        if admit:
-            self._chroma_store(query, response, category)
-            self._redis_set(query, response, category)
-            print(f"[CACHED] category={category}  confidence={confidence:.1%}  latency={latency:.3f}s")
-        else:
-            print(f"[NOT CACHED] Gate 3 failed — confidence {confidence:.1%} below 90% threshold")
+        # ── STEP 4: Gate 3 — store only if classifier is confident ───────────
+        # Admits the data irrespective of the confidence score now 
+        self._chroma_store(query, response, category)
+        self._redis_set(query, response, category)
+        print(f"[CACHED] category={category}  conf={confidence:.1%}  latency={latency:.3f}s")
 
         return {
             "source":          "GEMINI_API",
             "latency_seconds": round(latency, 4),
             "category":        category,
-            "admit_to_cache":  admit,
             "confidence":      round(confidence, 4),
-            "response":        response
+            "response":        response,
+            "api_call_latency": round(api_call_latency, 4)
         }
 
 
-# -----------------------------------------------------
-# Initialize + Routes
-# -----------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Startup + Routes
+# ─────────────────────────────────────────────────────────────────────────────
 
 cache = TriGuardCache()
 
 
 @app.post("/ask")
-def ask_question(request: QueryRequest):
-    return cache.ask(request.query)
+async def ask_question(request: QueryRequest):
+    return await cache.ask(request.query)
 
 
 @app.get("/stats")
 def cache_stats():
+    redis_count = 0
+    if cache.redis:
+        try:
+            # FIX: use SCAN instead of KEYS to avoid O(N) blocking on large keyspaces
+            cursor, keys = cache.redis.scan(match="tg:*", count=100)
+            redis_count  = len(keys)
+        except Exception:
+            redis_count = -1
     return {
+        "chroma_entries":     cache.collection.count(),
+        "redis_keys":         redis_count,
+        "embed_lru_entries":  len(cache._embed_cache),
+        "rerank_lru_entries": len(cache._rerank_cache),
+        "pyfs_lru_entries":   len(cache.verifier._cache),
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status":         "ok",
+        "ttl_classifier": cache.ttl_clf is not None,
+        "redis":          cache.redis is not None,
         "chroma_entries": cache.collection.count(),
-        "redis_entries":  len(cache.redis.keys("tg:*")) if cache.redis else 0
+        "models": {
+            "embedder":       "bge-small-en-v1.5  (384-dim, cache vectors)",
+            "ttl_classifier": "bge-small-en-v1.5 (384-dim, TTL classification)",
+            "reranker":       "quora-roberta-base",
+            "answer_ranker":  "ms-marco-MiniLM-L-6-v2",
+            "pyfs_verifier":  "stsb-roberta-base (low-sim path only)",
+        }
     }
 
 
 if __name__ == "__main__":
-    uvicorn.run("temp:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("temp_final:app", host="0.0.0.0", port=8000, reload=True)

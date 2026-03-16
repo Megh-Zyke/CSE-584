@@ -51,7 +51,6 @@ CONFIDENCE_THRESHOLD = 0.60
 
 FALLBACK_LABEL = "Volatile"
 
-CACHE_ADMISSION_THRESHOLD = 0.90
 # ─────────────────────────────────────────────────────────────────────────────
 # Inference result dataclass
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +66,6 @@ class TTLResult:
     ttl             : TTL in seconds (float("inf") for Static)
     ttl_display     : Human-readable TTL string
     confidence      : Classifier probability for the predicted class (0–1)
-    admit_to_cache  : True if Gate 3 confidence >= CACHE_ADMISSION_THRESHOLD
     stage           : Which pipeline stage produced this result
     all_probs       : Full probability dict across all classes
     latency_ms      : Total inference time in milliseconds
@@ -76,18 +74,15 @@ class TTLResult:
     ttl            : float
     ttl_display    : str
     confidence     : float
-    admit_to_cache : bool
     stage          : str
     all_probs      : dict[str, float] = field(default_factory=dict)
     latency_ms     : float = 0.0
 
     def __str__(self) -> str:
-        cache_flag = "✓ CACHE" if self.admit_to_cache else "✗ NO CACHE"
         return (
             f"Label      : {self.label}\n"
             f"TTL        : {self.ttl_display}\n"
             f"Confidence : {self.confidence:.1%}\n"
-            f"Cache gate : {cache_flag}\n"
             f"Stage      : {self.stage}\n"
             f"Latency    : {self.latency_ms:.1f} ms\n"
             f"All probs  : " +
@@ -126,12 +121,10 @@ class TTLClassifier:
         encoder_name: str = ENCODER_NAME,
         confidence_threshold: float = CONFIDENCE_THRESHOLD,
         fallback_label: str = FALLBACK_LABEL,
-        cache_admission_threshold: float = CACHE_ADMISSION_THRESHOLD,
     ):
         self.encoder_name              = encoder_name
         self.confidence_threshold      = confidence_threshold
         self.fallback_label            = fallback_label
-        self.cache_admission_threshold = cache_admission_threshold
 
         self.encoder       : Optional[SentenceTransformer] = None
         self.clf           : Optional[LogisticRegression]  = None
@@ -179,7 +172,6 @@ class TTLClassifier:
             ttl            = TTL_MAP[label],
             ttl_display    = TTL_DISPLAY[label],
             confidence     = confidence,
-            admit_to_cache = confidence >= self.cache_admission_threshold,
             stage          = stage,
             all_probs      = all_probs,
             latency_ms     = latency_ms,
@@ -298,7 +290,6 @@ class TTLClassifier:
             "encoder_name":            self.encoder_name,
             "confidence_threshold":    self.confidence_threshold,
             "fallback_label":          self.fallback_label,
-            "cache_admission_threshold": self.cache_admission_threshold,
         }, path)
         log.info("Model saved → %s", path)
 
@@ -315,7 +306,6 @@ class TTLClassifier:
         self.encoder_name              = payload.get("encoder_name", ENCODER_NAME)
         self.confidence_threshold      = payload.get("confidence_threshold", CONFIDENCE_THRESHOLD)
         self.fallback_label            = payload.get("fallback_label", FALLBACK_LABEL)
-        self.cache_admission_threshold = payload.get("cache_admission_threshold", CACHE_ADMISSION_THRESHOLD)
         self.is_trained                = True
         self._load_encoder()
         log.info("Model loaded ← %s  |  classes: %s", path, self._classes)
@@ -447,12 +437,12 @@ class TTLClassifier:
         """Return just the TTL value in seconds."""
         return self.predict(query).ttl
 
-    def should_cache(self, query: str) -> tuple[bool, TTLResult]:
+    def should_cache(self, query: str) -> TTLResult:
         """
         Gate 3 integration point for the caching layer.
         """
         result = self.predict(query)
-        return result.admit_to_cache, result
+        return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
