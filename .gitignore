@@ -2,3 +2,8 @@ __pycache__
 .env
 .xlsx
 chroma_store
+pyFS.py
+server.py
+temp.py 
+xlsx 
+trigard_cache.pkl
