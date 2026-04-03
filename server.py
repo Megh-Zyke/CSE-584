@@ -107,6 +107,8 @@ class PyFSSemanticCache:
 class TriGuardCache:
 
     def __init__(self):
+        import threading
+        self._store_lock = threading.Lock()
 
         #print("Loading embedding model (bge-small)...")
         #self.embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", backend="onnx")
@@ -143,7 +145,12 @@ class TriGuardCache:
 
         print("Connecting to Redis...")
         try:
-            self.redis = redislib.Redis(host="localhost", port=6379, decode_responses=True)
+            self.redis = redislib.Redis(
+                host=os.environ.get("REDIS_HOST", "localhost"),
+                port=int(os.environ.get("REDIS_PORT", 6379)),
+                password=os.environ.get("REDIS_PASSWORD", None),
+                decode_responses=True
+            )
             self.redis.ping()
             print("[Redis] Connected")
         except redislib.exceptions.ConnectionError:
@@ -190,7 +197,7 @@ class TriGuardCache:
             except Exception as e:
                 print(f"[TTL Classifier] Error: {e} — failing safe (Volatile/no-cache)")
         # FIX: fail safe — do not cache on classifier error
-        return "Volatile", False, 0.0
+        return "Volatile", 0.0
 
     # ─────────────────────────────────────────────────────────────────
     # Redis helpers
@@ -279,7 +286,8 @@ class TriGuardCache:
         return hits
 
     def _chroma_store(self, query: str, response: str, category: str):
-        self.collection.upsert(
+        with self._store_lock:
+            self.collection.upsert(
             ids=[query_hash(query)],
             embeddings=[self._embed(query)],
             documents=[response],
@@ -289,6 +297,7 @@ class TriGuardCache:
                 "cached_at":      time.time(),
             }]
         )
+
 
     # ─────────────────────────────────────────────────────────────────
     # Reranker with LRU cache
