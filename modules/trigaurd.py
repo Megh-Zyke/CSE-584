@@ -12,10 +12,12 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from modules.dynamic_ttl_training import TTLClassifier
 from modules.semantic_cache import PyFSSemanticCache
 from modules.query import Message, QueryRequest
+import threading
+from modules.gate3 import Gate3
 
 class TriGuardCache:
-    def __init__(self):
 
+    def __init__(self):
         #print("Loading embedding model (bge-small)...")
         #self.embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", backend="onnx")
         print("Loading TTL classifier + bge small embedding model")
@@ -51,7 +53,12 @@ class TriGuardCache:
 
         print("Connecting to Redis...")
         try:
-            self.redis = redislib.Redis(host="localhost", port=6379, decode_responses=True)
+            self.redis = redislib.Redis(
+                host=os.environ.get("REDIS_HOST", "localhost"),
+                port=int(os.environ.get("REDIS_PORT", 6379)),
+                password=os.environ.get("REDIS_PASSWORD", None),
+                decode_responses=True
+            )
             self.redis.ping()
             print("[Redis] Connected")
         except redislib.exceptions.ConnectionError:
@@ -61,10 +68,8 @@ class TriGuardCache:
         # IMPORTANT: ttl_classifier.joblib is a dict saved by TTLClassifier.save().
         # Must be loaded via TTLClassifier().load(), NOT joblib.load() directly.
         # joblib.load() returns a plain dict with no .predict() method.
-        
-
-
         self.verifier = PyFSSemanticCache()
+        self.gate3 = Gate3(threshold=0.5, alpha=0.3)
 
         self.embedding_threshold        = 0.80
         self.rerank_threshold           = 0.70
@@ -72,7 +77,7 @@ class TriGuardCache:
         self.answer_relevance_threshold = 1.50
 
     # ─────────────────────────────────────────────────────────────────
-    # Gate 2 + Gate 3
+    # Gate 2 
     # ─────────────────────────────────────────────────────────────────
 
     def classify_query(self, query: str):
@@ -98,7 +103,7 @@ class TriGuardCache:
             except Exception as e:
                 print(f"[TTL Classifier] Error: {e} — failing safe (Volatile/no-cache)")
         # FIX: fail safe — do not cache on classifier error
-        return "Volatile", False, 0.0
+        return "Volatile", 0.0
 
     # ─────────────────────────────────────────────────────────────────
     # Redis helpers
@@ -187,7 +192,8 @@ class TriGuardCache:
         return hits
 
     def _chroma_store(self, query: str, response: str, category: str):
-        self.collection.upsert(
+        with self._store_lock:
+            self.collection.upsert(
             ids=[query_hash(query)],
             embeddings=[self._embed(query)],
             documents=[response],
@@ -197,6 +203,7 @@ class TriGuardCache:
                 "cached_at":      time.time(),
             }]
         )
+
 
     # ─────────────────────────────────────────────────────────────────
     # Reranker with LRU cache
@@ -244,54 +251,51 @@ class TriGuardCache:
     def verify_answer_relevance(self, query: str, response: str) -> float:
         return float(self.reranker.predict([[query, response[:512]]]))
 
-    def call_gemini_chat(self, query: str, history: List[Message]) -> str:
+    def call_gemini(self, query: str) -> str:
         try:
-            chat_content = []
-            if history:
-                for message in history:
-                    chat_content.append({"role": message.role, "parts": [{"text": message.response}]})
-            chat_content.append({"role": "user", "parts": [{"text": query}]})
             response = client.models.generate_content(
                 model="gemini-3-flash-preview",
-                contents=chat_content,
+                contents=query,
             )
             return response.text
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
-    
-    class ContextNormalizer:
-        def __init__(self, model_name = "llama3.2"):
-            self.model_name= model_name
-            self.client = AsyncClient(host = 'http://localhost:11434')
-        
-        async def normalize(self, query: str, history = List['Message']) -> str:
-            if not history:
-                return query
 
-            context_lines = [f"{m.role}: {m.response}" for m in history]
-            context_str = "\n".join(context_lines)
-            prompt = (
-            f"Given the following conversation history, rewrite the current query into a single, "
-            f"standalone question that resolves any vague references (like 'it', 'they', 'this').\n"
-            f"Do NOT answer the question. ONLY output the rewritten text.\n\n"
-            f"History:\n{context_str}\n\n"
-            f"Current Query: {current_query}\n"
-            f"Standalone Query:"
-        )
-
-            try:
-                response = await self.client.generate ( 
-                    model = self.model_name, 
-                    prompt = prompt, 
-                    options={
-                        "temperature": 0.0,
-                    }
+    # ─────────────────────────────────────────────────────────────────
+    # GATE 3
+    # ─────────────────────────────────────────────────────────────────
+    async def _gate3_and_store(self, query: str, response: str, category: str):
+        """
+        Runs in the background after the user already received their response.
+        Gate 3 decides whether the response is safe to cache.
+        If admitted  → write to ChromaDB + Redis
+        If blocked   → log and discard (hallucination not cached)
+        """
+        try:
+            result = await self.gate3.check_async(query, response)
+ 
+            print(
+                f"[Gate3] hhem={result['hhem_score']}  "
+                f"reflection={result['reflection_score']}  "
+                f"combined={result['combined_score']}  "
+                f"admit={result['admit_to_cache']}  "
+                f"wall={result['latency']['actual_ms']}ms"
+            )
+ 
+            if result["admit_to_cache"]:
+                # Write to both stores
+                loop = asyncio.get_event_loop()
+                await asyncio.gather(
+                    loop.run_in_executor(_executor, self._chroma_store, query, response, category),
+                    loop.run_in_executor(_executor, self._redis_set,    query, response, category),
                 )
-                return response.response.strip()
+                print(f"[Gate3] ✅ Admitted to cache — category={category}")
+            else:
+                print(f"[Gate3] ❌ Blocked — response not cached (combined={result['combined_score']})")
+ 
+        except Exception as e:
+            print(f"[Gate3] ERROR in background task: {e}")
 
-            except Exception as e:
-                print(f"ContextNormalizer error: {e}")
-                return query
 
     # ─────────────────────────────────────────────────────────────────
     # Main query handler — async so Gemini calls don't block other reqs
@@ -418,11 +422,15 @@ class TriGuardCache:
         latency  = end - t_start
         api_call_latency = end - gemini_start
 
+
+        asyncio.create_task(self._gate3_and_store(query, response, category))
+
         # ── STEP 4: Gate 3 — store only if classifier is confident ───────────
         # Admits the data irrespective of the confidence score now 
-        self._chroma_store(query, response, category)
-        self._redis_set(query, response, category)
-        print(f"[CACHED] category={category}  conf={confidence:.1%}  latency={latency:.3f}s")
+        
+        # self._chroma_store(query, response, category)
+        # self._redis_set(query, response, category)
+        # print(f"[CACHED] category={category}  conf={confidence:.1%}  latency={latency:.3f}s")
 
         return {
             "source":          "GEMINI_API",
