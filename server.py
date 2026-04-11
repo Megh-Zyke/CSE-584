@@ -553,7 +553,7 @@ cache = TriGuardCache()
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
-    return await cache.ask(request.query)
+    return await cache.ask(request.query, request.history)
 
 @app.get("/gate3/log")
 def gate3_log_endpoint():
@@ -564,17 +564,29 @@ def cache_stats():
     redis_count = 0
     if cache.redis:
         try:
-            # FIX: use SCAN instead of KEYS to avoid O(N) blocking on large keyspaces
             cursor, keys = cache.redis.scan(match="tg:*", count=100)
-            redis_count  = len(keys)
+            redis_count = len(keys)
         except Exception:
             redis_count = -1
+
+    total = max(1, cache.metrics["total_queries"])
+    cache_hits = (
+        cache.metrics["redis_hits"] +
+        cache.metrics["chroma_hits_fast"] +
+        cache.metrics["chroma_hits_verified"]
+    )
+
     return {
-        "chroma_entries":     cache.collection.count(),
-        "redis_keys":         redis_count,
-        "embed_lru_entries":  len(cache._embed_cache),
-        "rerank_lru_entries": len(cache._rerank_cache),
-        "pyfs_lru_entries":   len(cache.verifier._cache),
+        "chroma_entries":        cache.collection.count(),
+        "redis_keys":            redis_count,
+        "embed_lru_entries":     len(cache._embed_cache),
+        "rerank_lru_entries":    len(cache._rerank_cache),
+        "pyfs_lru_entries":      len(cache.verifier._cache),
+        "metrics":               cache.metrics,
+        "hit_rate_percent":      round(cache_hits / total * 100, 2),
+        "api_reduction_percent": round(
+            (1 - cache.metrics["gemini_calls"] / total) * 100, 2
+        )
     }
 
 
@@ -588,9 +600,9 @@ def health():
         "models": {
             "embedder":       "bge-small-en-v1.5  (384-dim, cache vectors)",
             "ttl_classifier": "bge-small-en-v1.5 (384-dim, TTL classification)",
-            "reranker":       "quora-roberta-base",
-            "answer_ranker":  "ms-marco-MiniLM-L-6-v2",
+            "reranker":       "ms-marco-MiniLM-L-6-v2",
             "pyfs_verifier":  "stsb-roberta-base (low-sim path only)",
+            "gate3":          "qwen2.5:1.5b via Ollama (confidence + faithfulness)",
         }
     }
 
