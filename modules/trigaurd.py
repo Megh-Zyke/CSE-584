@@ -35,6 +35,10 @@ def query_hash(query: str) -> str:
 class TriGuardCache:
 
     def __init__(self):
+        print("Loading ContextGate (Gate1)...")
+        from modules.gate1 import ContextGate
+        self.gate1 = ContextGate()
+
         #print("Loading embedding model (bge-small)...")
         #self.embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", backend="onnx")
         print("Loading TTL classifier + bge small embedding model")
@@ -333,7 +337,7 @@ class TriGuardCache:
     # Main query handler — async so Gemini calls don't block other reqs
     # ─────────────────────────────────────────────────────────────────
 
-    async def ask(self, query: str) -> dict:
+    async def ask(self, query: str, history: List[Message] = None) -> dict:
         """
         FIX 1 (critical): TTL classification runs FIRST, before any cache
         lookup. Volatile queries bypass ChromaDB entirely — they must
@@ -348,6 +352,14 @@ class TriGuardCache:
         PyFS is retained for the lower-confidence full path only.
         """ 
         t_start = time.perf_counter()
+
+        # ── Gate 1: Context Normalization ────────────────────────────────────
+        if history:
+            history_texts = [msg.response for msg in history]
+            normalized_query = self.gate1.rewrite_query(query, history_texts)
+            if normalized_query != query:
+                print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
+                query = normalized_query
 
         # ── STEP 0: Classify query FIRST ─────────────────────────────────────
         # This must happen before any cache lookup.

@@ -48,7 +48,7 @@ cache = TriGuardCache()
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
-    return await cache.ask(request.query)
+    return await cache.ask(request.query, request.history)
 
 
 @app.get("/stats")
