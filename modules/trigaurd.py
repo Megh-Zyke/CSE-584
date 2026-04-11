@@ -76,16 +76,21 @@ class TriGuardCache:
 
         print("Connecting to Redis...")
         try:
-            self.redis = redislib.Redis(
-                host=os.environ.get("REDIS_HOST", "localhost"),
-                port=int(os.environ.get("REDIS_PORT", 6379)),
-                password=os.environ.get("REDIS_PASSWORD", None),
-                decode_responses=True
-            )
+            redis_url = os.environ.get("REDIS_URL")
+            if redis_url:
+                redis_url = redis_url.strip('"').strip("'")
+                self.redis = redislib.Redis.from_url(redis_url, decode_responses=True)
+            else:
+                self.redis = redislib.Redis(
+                    host=os.environ.get("REDIS_HOST", "localhost"),
+                    port=int(os.environ.get("REDIS_PORT", 6379)),
+                    password=os.environ.get("REDIS_PASSWORD", None),
+                    decode_responses=True
+                )
             self.redis.ping()
             print("[Redis] Connected")
-        except redislib.exceptions.ConnectionError:
-            print("[Redis] WARNING: Not reachable — TTL layer disabled")
+        except Exception as e:
+            print(f"[Redis] WARNING: Not reachable — TTL layer disabled. Detail: {e}")
             self.redis = None
 
         # IMPORTANT: ttl_classifier.joblib is a dict saved by TTLClassifier.save().
