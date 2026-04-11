@@ -1,20 +1,37 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["ONNXRUNTIME_NUM_THREADS"] = "1"
+os.environ["ORT_NUM_THREADS"] = "1"
+import time
+import asyncio
 import hashlib
 import uvicorn
+import numpy as np
+import torch
+import chromadb
+import redis as redislib
+import threading
+from collections import deque
+gate3_log = deque(maxlen=100) 
+
 from concurrent.futures import ThreadPoolExecutor
-
-from ollama import AsyncClient
-
 from google import genai
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from sentence_transformers import CrossEncoder
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
 from modules.trigaurd import TriGuardCache
 from modules.query import QueryRequest
 from modules.gate3 import Gate3
+from modules.dynamic_ttl_training import TTLClassifier
 
 load_dotenv()
+
 
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not API_KEY:
@@ -22,7 +39,11 @@ if not API_KEY:
 
 client = genai.Client(api_key=API_KEY)
 
-app = FastAPI(title="Tri-Guard Semantic Cache API", version="5.0")
+app = FastAPI(
+    title="Tri-Guard Semantic Cache API",
+    version="5.0",
+    root_path="https://greatlakes.arc-ts.umich.edu/rnode/gl1250.arc-ts.umich.edu/2739/proxy/8000/"  # or whatever your proxy prefix is
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -146,7 +167,7 @@ class TriGuardCache:
         # Must be loaded via TTLClassifier().load(), NOT joblib.load() directly.
         # joblib.load() returns a plain dict with no .predict() method.
         self.verifier = PyFSSemanticCache()
-        self.gate3 = Gate3(threshold=0.5, alpha=0.3)
+        self.gate3 = Gate3(threshold=0.5)
 
         self.embedding_threshold        = 0.80
         self.rerank_threshold           = 0.70
@@ -350,15 +371,19 @@ class TriGuardCache:
         """
         try:
             result = await self.gate3.check_async(query, response)
- 
-            print(
-                f"[Gate3] hhem={result['hhem_score']}  "
-                f"reflection={result['reflection_score']}  "
-                f"combined={result['combined_score']}  "
-                f"admit={result['admit_to_cache']}  "
-                f"wall={result['latency']['actual_ms']}ms"
-            )
- 
+
+            log_entry = {
+            "query":              query[:100],
+            "confidence_score":   result["confidence_score"],
+            "faithfulness_score": result["faithfulness_score"],
+            "combined_score":     result["combined_score"],
+            "admit_to_cache":     result["admit_to_cache"],
+            "mode":               result["mode"],
+            "category":           category,
+            "timestamp":          time.time(),
+        }
+            gate3_log.appendleft(log_entry) 
+
             if result["admit_to_cache"]:
                 # Write to both stores
                 loop = asyncio.get_event_loop()
@@ -530,6 +555,9 @@ cache = TriGuardCache()
 async def ask_question(request: QueryRequest):
     return await cache.ask(request.query)
 
+@app.get("/gate3/log")
+def gate3_log_endpoint():
+    return {"entries": list(gate3_log)}
 
 @app.get("/stats")
 def cache_stats():
