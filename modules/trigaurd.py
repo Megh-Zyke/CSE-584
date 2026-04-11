@@ -8,7 +8,7 @@ import hashlib
 import chromadb
 import redis as redislib
 from typing import List
-from ollama import AsyncClient
+
 from google import genai
 from fastapi import FastAPI, HTTPException
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -41,6 +41,8 @@ class TriGuardCache:
 
         #print("Loading embedding model (bge-small)...")
         #self.embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", backend="onnx")
+
+        self._store_lock = threading.Lock()
         print("Loading TTL classifier + bge small embedding model")
         self.ttl_clf = TTLClassifier()
         try:

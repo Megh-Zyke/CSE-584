@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 # ── Ollama config ────────────────────────────────────────────────────────────
-OLLAMA_URL   = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5:1.5b"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "qwen2.5:3b"
 
 CONFIDENCE_PROMPT = """You answered this query: "{query}"
 Your answer was: "{response}"
@@ -123,13 +123,6 @@ class Gate3:
             "combined_score":     round(combined, 4),
             "admit_to_cache":     combined >= self.threshold,
             "mode":               mode,
-            "latency": {
-                "confidence_ms":   round(conf_latency   * 1000, 1),
-                "faithfulness_ms": round(faith_latency  * 1000, 1),
-                "sequential_ms":   round((conf_latency + faith_latency) * 1000, 1),
-                "actual_ms":       round(wall_latency   * 1000, 1),
-                "saved_ms":        round((conf_latency + faith_latency - wall_latency) * 1000, 1),
-            }
         }
 
     # ── Sync convenience wrapper ──────────────────────────────────────────────
