@@ -8,7 +8,7 @@ class ContextGate:
         self.model = T5ForConditionalGeneration.from_pretrained(model_name)
 
         # Keywords that signal a need for context normalization
-        self.context_signals = ["it", "he", "she", "they", "that", "this", "him", "her", "then", "there", "his", "their"]
+        self.context_signals = ["it", "he", "she", "they", "that", "this", "him", "her", "then", "there", "his", "their", "its"]
 
     def _needs_rewriting(self, query):
         """
@@ -48,3 +48,18 @@ class ContextGate:
       # IMPROVEMENT 3: Basic validation
       # If it's still identical, it failed to resolve
       return resolved_query
+
+if __name__ == "__main__":
+    gate1 = ContextGate()
+
+    # Simulate the conversation history
+    history = [
+        "what is the capital of France?",
+        "The capital of France is Paris."
+    ]
+
+    # Ambiguous follow-up query
+    query = "what is its population?"
+
+    result = gate1.rewrite_query(query, history)
+    print(result)

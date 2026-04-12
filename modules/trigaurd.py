@@ -140,9 +140,10 @@ class TriGuardCache:
                     f"latency={result.latency_ms:.1f}ms"
                 )
                 return result.label, result.confidence
+
             except Exception as e:
                 print(f"[TTL Classifier] Error: {e} — failing safe (Volatile/no-cache)")
-        # FIX: fail safe — do not cache on classifier error
+
         return "Volatile", 0.0
 
     # ─────────────────────────────────────────────────────────────────
@@ -319,7 +320,6 @@ class TriGuardCache:
                 f"faithfulness={result['faithfulness_score']}  "
                 f"combined={result['combined_score']}  "
                 f"admit={result['admit_to_cache']}  "
-                f"wall={result['latency']['actual_ms']}ms"
             )
  
             if result["admit_to_cache"]:
@@ -361,9 +361,11 @@ class TriGuardCache:
         t_start = time.perf_counter()
 
         # ── Gate 1: Context Normalization ────────────────────────────────────
+        
         if history:
             history_texts = [msg.response for msg in history]
             normalized_query = self.gate1.rewrite_query(query, history_texts)
+            print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
             if normalized_query != query:
                 print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
                 query = normalized_query
