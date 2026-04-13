@@ -26,9 +26,10 @@ class ContextGate:
       # IMPROVEMENT 1: More explicit "Few-Shot" style prompt
       # Small models perform much better when you show them the 'Pattern'
       input_text = (
+          f"Given the following context, rewrite the question to be fully standalone and clear.\n\n"
           f"Context: {last_context}\n"
-          f"Ambiguous Question: {current_query}\n"
-          f"Standalone Question using names from context: "
+          f"Question: {current_query}\n\n"
+          f"Rewritten Question:"
       )
       print(f"[Gate1] Rewriting query: {input_text}")
       inputs = self.tokenizer(input_text, return_tensors="pt")
