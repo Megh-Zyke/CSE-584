@@ -19,7 +19,7 @@ from modules.query import Message, QueryRequest
 import threading
 from modules.gate3 import Gate3
 from dotenv import load_dotenv
-
+from typing import Optional
 load_dotenv()
 _executor = ThreadPoolExecutor(max_workers=4)
 client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
@@ -329,14 +329,28 @@ class TriGuardCache:
     def verify_answer_relevance(self, query: str, response: str) -> float:
         return float(self.reranker.predict([[query, response[:512]]]))
 
-    def call_gemini(self, query: str) -> str:
+    def call_gemini(self, query: str , history: Optional[List[Message]] = None) -> str:
         try:
             self._api_call_times.append(time.time())
-            load_dotenv(override=True)
-            current_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-            response = current_client.models.generate_content(
+            content = []
+
+            if history: 
+                for msg in history:
+                    content.append({
+                        "role": "user",
+                        "parts": [{"text": msg.query}]
+                    })
+                    content.append({
+                        "role": "model",
+                        "parts": [{"text": msg.response}]
+                    })
+            content.append({
+                "role": "user",
+                "parts": [{"text": query}]
+            })
+            response = client.models.generate_content(
                 model="gemini-3-flash-preview",
-                contents=query,
+                contents=content,
             )
             return response.text
         except Exception as e:
@@ -382,7 +396,10 @@ class TriGuardCache:
     # ─────────────────────────────────────────────────────────────────
     # Main query handler — async so Gemini calls don't block other reqs
     # ─────────────────────────────────────────────────────────────────
-
+    def _trim_history(self, history, max_turns=3):
+        if not history:
+            return []
+        return history[-max_turns:]
     async def ask(self, query: str, history: List[Message] = None) -> dict:
         """
         FIX 1 (critical): TTL classification runs FIRST, before any cache
@@ -402,6 +419,7 @@ class TriGuardCache:
         # ── Gate 1: Context Normalization ────────────────────────────────────
         
         if history:
+            history = self._trim_history(history)
             history_texts = [f"{msg.query}: {msg.response}" for msg in history]
             normalized_query = self.gate1.rewrite_query(query, history_texts)
             print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
@@ -420,7 +438,12 @@ class TriGuardCache:
         if category == "Volatile":
             # print(f"[VOLATILE] Bypassing cache — calling Gemini directly")
             loop     = asyncio.get_event_loop()
-            response = await loop.run_in_executor(_executor, self.call_gemini, query)
+            response = await loop.run_in_executor(
+                _executor,
+                self.call_gemini,
+                query,
+                history
+            )
             t_end = time.perf_counter()
             self._inc(volatile_bypasses=1, total_queries=1)
             return {
@@ -515,7 +538,12 @@ class TriGuardCache:
         print(f"[MISS] Calling Gemini (category={category})")
         gemini_start = time.perf_counter()
         loop     = asyncio.get_event_loop()
-        response = await loop.run_in_executor(_executor, self.call_gemini, query)
+        response = await loop.run_in_executor(
+            _executor,
+            self.call_gemini,
+            query,
+            history
+        )
         end = time.perf_counter()
         latency  = end - t_start
         api_call_latency = end - gemini_start
