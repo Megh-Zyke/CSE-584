@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import numpy as np
 import os
@@ -111,13 +112,15 @@ class TriGuardCache:
             "gate3_admitted": 0,
             "gate3_blocked": 0,
             "gate3_errors": 0,
-            "total_queries": 0
+            "total_queries": 0,
+            "gate1_rewrites": 0
         }
 
         self.embedding_threshold        = 0.80
         self.rerank_threshold           = 0.70
         self.contradiction_threshold    = 0.30
         self.answer_relevance_threshold = 1.50
+        self._api_call_times            = deque(maxlen=100)
 
     def _inc(self, **fields: int) -> None:
         """Atomically increment one or more metrics counters."""
@@ -245,6 +248,7 @@ class TriGuardCache:
         return hits
 
     def _chroma_store(self, query: str, response: str, category: str):
+        self._evict_if_needed(max_entries=1000)
         with self._store_lock:
             self.collection.upsert(
             ids=[query_hash(query)],
@@ -300,20 +304,43 @@ class TriGuardCache:
     # ─────────────────────────────────────────────────────────────────
     # Answer relevance
     # ─────────────────────────────────────────────────────────────────
+    def _dynamic_threshold(self) -> float:
+        now = time.time()
+        recent = [t for t in self._api_call_times if now - t < 60]
+        rate = len(recent)
+        if rate > 10:
+            return 0.75
+        elif rate < 3:
+            return 0.85
+        return 0.80
+
+    def _evict_if_needed(self, max_entries: int = 1000):
+        count = self.collection.count()
+        if count < max_entries:
+            return
+        results = self.collection.get(include=["metadatas"])
+        entries = list(zip(results["ids"], results["metadatas"]))
+        entries.sort(key=lambda x: x[1].get("cached_at", 0))
+        to_remove = max(1, count // 10)
+        ids_to_remove = [e[0] for e in entries[:to_remove]]
+        self.collection.delete(ids=ids_to_remove)
+        print(f"[Eviction] Removed {len(ids_to_remove)} oldest entries")
 
     def verify_answer_relevance(self, query: str, response: str) -> float:
         return float(self.reranker.predict([[query, response[:512]]]))
 
     def call_gemini(self, query: str) -> str:
         try:
-            response = client.models.generate_content(
+            self._api_call_times.append(time.time())
+            load_dotenv(override=True)
+            current_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+            response = current_client.models.generate_content(
                 model="gemini-3-flash-preview",
                 contents=query,
             )
             return response.text
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
-
     # ─────────────────────────────────────────────────────────────────
     # GATE 3
     # ─────────────────────────────────────────────────────────────────
@@ -381,6 +408,7 @@ class TriGuardCache:
             if normalized_query != query:
                 print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
                 query = normalized_query
+                self.metrics["gate1_rewrites"] += 1
 
         # ── STEP 0: Classify query FIRST ─────────────────────────────────────
         # This must happen before any cache lookup.
@@ -432,7 +460,7 @@ class TriGuardCache:
             # ── FAST PATH: high cosine similarity ────────────────────────────
             # FIX: PyFS removed here. Cosine > 0.80 + correct category from
             # classifier is sufficient confidence. Saves 200ms per cache hit.
-            if best_sim > self.embedding_threshold:
+            if best_sim > self._dynamic_threshold():
                 print(f"[DEBUG] Fast path hit — sim={best_sim:.4f} > {self.embedding_threshold}")
                 self._redis_set(query, best["response"], best["category"])
                 t_end = time.perf_counter()
