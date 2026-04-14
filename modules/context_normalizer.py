@@ -12,7 +12,7 @@ class ContextNormalizer:
             if not history:
                 return query
 
-            context_lines = [f"{m.role}: {m.response}" for m in history]
+            context_lines = [f"{m.query}: {m.response}" for m in history]
             context_str = "\n".join(context_lines)
             prompt = (
                 "You are a query rewriting system.\n\n"
