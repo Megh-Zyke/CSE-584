@@ -19,15 +19,15 @@ from modules.query import Message, QueryRequest
 import threading
 from modules.gate3 import Gate3
 from dotenv import load_dotenv
-
+from typing import Optional
 load_dotenv()
 _executor = ThreadPoolExecutor(max_workers=4)
 client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
 
 TTL_MAP = {
-    "Static":      -1,
-    "Slow-Moving": 30 * 24 * 60 * 60,
-    "Volatile":    5 * 60,
+    "Static":      7 * 24 * 60 * 60,   # 7 days
+    "Slow-Moving": 3 * 24 * 60 * 60,   # 3 days
+    "Volatile":    5 * 60,             # 5 min
 }
 
 def query_hash(query: str) -> str:
@@ -40,9 +40,11 @@ class TriGuardCache:
         from modules.gate1 import ContextGate
         self.gate1 = ContextGate()
 
+        self._store_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
+
         #print("Loading embedding model (bge-small)...")
         #self.embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", backend="onnx")
-
         print("Loading TTL classifier + bge small embedding model")
         self.ttl_clf = TTLClassifier()
         try:
@@ -72,7 +74,9 @@ class TriGuardCache:
             name="trigard_cache",
             metadata={"hnsw:space": "cosine"}
         )
-        print(f"[ChromaDB] {self.collection.count()} entries loaded from disk")
+        with self._store_lock:
+            count = self.collection.count()
+        print(f"[ChromaDB] {count} entries loaded from disk")
 
         print("Connecting to Redis...")
         try:
@@ -98,7 +102,7 @@ class TriGuardCache:
         # joblib.load() returns a plain dict with no .predict() method.
         self.verifier = PyFSSemanticCache()
         self.gate3 = Gate3(threshold=0.5)
-        self._store_lock = threading.Lock()
+
         self.metrics = {
             "redis_hits": 0,
             "chroma_hits_fast": 0,
@@ -117,6 +121,13 @@ class TriGuardCache:
         self.contradiction_threshold    = 0.30
         self.answer_relevance_threshold = 1.50
         self._api_call_times            = deque(maxlen=100)
+
+    def _inc(self, **fields: int) -> None:
+        """Atomically increment one or more metrics counters."""
+        with self._metrics_lock:
+            for key, delta in fields.items():
+                self.metrics[key] += delta
+
 
     # ─────────────────────────────────────────────────────────────────
     # Gate 2 
@@ -216,13 +227,15 @@ class TriGuardCache:
     
     def _chroma_search_with_embedding(self, embedding: list, k: int = 5) -> list:
         """Search ChromaDB with a pre-computed embedding (avoids re-encoding)."""
-        if self.collection.count() == 0:
-            return []
-        results = self.collection.query(
-            query_embeddings=[embedding],
-            n_results=min(k, self.collection.count()),
-            include=["documents", "metadatas", "distances"]
-        )
+        with self._store_lock:                          
+            count = self.collection.count()
+            if count == 0:
+                return []
+            results = self.collection.query(
+                query_embeddings=[embedding],
+                n_results=min(k, count),
+                include=["documents", "metadatas", "distances"]
+            )
         hits = []
         for i in range(len(results["ids"][0])):
             hits.append({
@@ -316,14 +329,28 @@ class TriGuardCache:
     def verify_answer_relevance(self, query: str, response: str) -> float:
         return float(self.reranker.predict([[query, response[:512]]]))
 
-    def call_gemini(self, query: str) -> str:
+    def call_gemini(self, query: str , history: Optional[List[Message]] = None) -> str:
         try:
             self._api_call_times.append(time.time())
-            load_dotenv(override=True)
-            current_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-            response = current_client.models.generate_content(
+            content = []
+
+            if history: 
+                for msg in history:
+                    content.append({
+                        "role": "user",
+                        "parts": [{"text": msg.query}]
+                    })
+                    content.append({
+                        "role": "model",
+                        "parts": [{"text": msg.response}]
+                    })
+            content.append({
+                "role": "user",
+                "parts": [{"text": query}]
+            })
+            response = client.models.generate_content(
                 model="gemini-3-flash-preview",
-                contents=query,
+                contents=content,
             )
             return response.text
         except Exception as e:
@@ -355,21 +382,24 @@ class TriGuardCache:
                     loop.run_in_executor(_executor, self._chroma_store, query, response, category),
                     loop.run_in_executor(_executor, self._redis_set,    query, response, category),
                 )
-                self.metrics["gate3_admitted"] += 1
+                self._inc(gate3_admitted=1)
                 print(f"[Gate3] ✅ Admitted to cache — category={category}")
             else:
-                self.metrics["gate3_blocked"] += 1
+                self._inc(gate3_blocked=1)
                 print(f"[Gate3] ❌ Blocked — response not cached (combined={result['combined_score']})")
  
         except Exception as e:
-            self.metrics["gate3_errors"] += 1
+            self._inc(gate3_errors=1)
             print(f"[Gate3] ERROR in background task: {e}")
 
 
     # ─────────────────────────────────────────────────────────────────
     # Main query handler — async so Gemini calls don't block other reqs
     # ─────────────────────────────────────────────────────────────────
-
+    def _trim_history(self, history, max_turns=3):
+        if not history:
+            return []
+        return history[-max_turns:]
     async def ask(self, query: str, history: List[Message] = None) -> dict:
         """
         FIX 1 (critical): TTL classification runs FIRST, before any cache
@@ -389,7 +419,8 @@ class TriGuardCache:
         # ── Gate 1: Context Normalization ────────────────────────────────────
         
         if history:
-            history_texts = [msg.response for msg in history]
+            history = self._trim_history(history)
+            history_texts = [f"{msg.query}: {msg.response}" for msg in history]
             normalized_query = self.gate1.rewrite_query(query, history_texts)
             print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
             if normalized_query != query:
@@ -407,10 +438,14 @@ class TriGuardCache:
         if category == "Volatile":
             # print(f"[VOLATILE] Bypassing cache — calling Gemini directly")
             loop     = asyncio.get_event_loop()
-            response = await loop.run_in_executor(_executor, self.call_gemini, query)
+            response = await loop.run_in_executor(
+                _executor,
+                self.call_gemini,
+                query,
+                history
+            )
             t_end = time.perf_counter()
-            self.metrics["volatile_bypasses"] += 1
-            self.metrics["total_queries"] += 1
+            self._inc(volatile_bypasses=1, total_queries=1)
             return {
                 "source":     "GEMINI_VOLATILE",
                 "category":   "Volatile",
@@ -431,8 +466,7 @@ class TriGuardCache:
         if redis_result:
             #print(f"[Redis HIT] Returning from exact-match cache")
             t_end = time.perf_counter()
-            self.metrics["redis_hits"] += 1
-            self.metrics["total_queries"] += 1
+            self._inc(redis_hits=1, total_queries=1)
             #print(f"[DEBUG] Total latency: {t_end - t_start:.4f} seconds")
             return {"source": "REDIS_HIT", "response": redis_result, "latency_seconds": round(t_end - t_start, 4)} 
 
@@ -454,8 +488,7 @@ class TriGuardCache:
                 self._redis_set(query, best["response"], best["category"])
                 t_end = time.perf_counter()
                 print(f"[DEBUG] Total latency: {t_end - t_start:.4f} seconds")
-                self.metrics["chroma_hits_fast"] += 1
-                self.metrics["total_queries"] += 1
+                self._inc(chroma_hits_fast=1, total_queries=1)
                 return {
                     "source":     "CACHE_HIT_FAST",
                     "similarity": round(best_sim, 4),
@@ -505,7 +538,12 @@ class TriGuardCache:
         print(f"[MISS] Calling Gemini (category={category})")
         gemini_start = time.perf_counter()
         loop     = asyncio.get_event_loop()
-        response = await loop.run_in_executor(_executor, self.call_gemini, query)
+        response = await loop.run_in_executor(
+            _executor,
+            self.call_gemini,
+            query,
+            history
+        )
         end = time.perf_counter()
         latency  = end - t_start
         api_call_latency = end - gemini_start
@@ -519,8 +557,7 @@ class TriGuardCache:
         # self._chroma_store(query, response, category)
         # self._redis_set(query, response, category)
         # print(f"[CACHED] category={category}  conf={confidence:.1%}  latency={latency:.3f}s")
-        self.metrics["gemini_calls"] += 1
-        self.metrics["total_queries"] += 1
+        self._inc(gemini_calls=1, total_queries=1)
 
         return {
             "source":          "GEMINI_API",
