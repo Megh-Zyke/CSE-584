@@ -1,6 +1,6 @@
 import torch 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
+import numpy as np
 class PyFSSemanticCache:
 
     def __init__(self, model_name="cross-encoder/stsb-roberta-base"):
