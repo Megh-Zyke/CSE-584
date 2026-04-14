@@ -6,31 +6,48 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 # ── Ollama config ────────────────────────────────────────────────────────────
-OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "qwen2.5:3b"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "qwen2.5:1.5b"
 
-CONFIDENCE_PROMPT = """You answered this query: "{query}"
-Your answer was: "{response}"
+CONFIDENCE_PROMPT = """You are a cache quality evaluator.
 
-How confident are you this answer is factually correct and complete?
-Reply with ONLY a single float between 0.0 and 1.0. Nothing else."""
-
-FAITHFULNESS_PROMPT = """Query: "{query}"
+Query: "{query}"
 Response: "{response}"
 
-Does the response directly and faithfully answer the query without
-introducing unsupported or speculative claims?
-Reply with ONLY a single float between 0.0 (unfaithful) and 1.0 (faithful). Nothing else."""
+Should this response be cached for future reuse?
+A response is worth caching if it is factually accurate, complete, and unlikely to change over time.
 
+Rate the caching confidence from 0.0 to 1.0.
+0.0 = should NOT be cached (wrong, incomplete, or time-sensitive)
+1.0 = should definitely be cached (accurate, complete, stable)
+
+Output only a single number like 0.8"""
+
+FAITHFULNESS_PROMPT = """You are a cache quality evaluator.
+
+Query: "{query}"
+Response: "{response}"
+
+Does this response faithfully and directly answer the query without unsupported claims?
+A faithful response is safe to cache and serve to future users asking the same question.
+
+Rate the faithfulness for caching from 0.0 to 1.0.
+0.0 = unfaithful (hallucinated, speculative, or off-topic — do NOT cache)
+1.0 = fully faithful (directly answers the query — safe to cache)
+
+Output only a single number like 0.8"""
 
 class Gate3:
-    def __init__(self, threshold: float = 0.5):
+    def __init__(self, threshold=0.64, confidence_weight=0.6, faithfulness_weight=0.4):
         """
         Both signals equally weighted: combined = 0.5 * confidence + 0.5 * faithfulness
         threshold: minimum combined score to admit response to cache
         """
         self.threshold = threshold
+        self.confidence_weight = confidence_weight
+        self.faithfulness_weight = faithfulness_weight
         # two threads — one per Ollama call, both fire in parallel
+
         self._executor = ThreadPoolExecutor(max_workers=2)
         print("[Gate3] Ready — dual SLM mode (confidence + faithfulness)")
 
@@ -50,6 +67,7 @@ class Gate3:
             )
             resp.raise_for_status()
             raw = resp.json().get("response", "").strip()
+            print(f"[Gate3] {label}: raw='{raw}'")  # ← add here
             score = self._parse_float(raw)
             if score is None:
                 print(f"[Gate3] {label}: could not parse float from '{raw}'")
@@ -91,20 +109,19 @@ class Gate3:
     # ── Parallel check ────────────────────────────────────────────────────────
     async def check_async(self, query: str, response: str) -> dict:
         loop    = asyncio.get_event_loop()
-        wall_t0 = time.perf_counter()
 
         # both Ollama calls fire at the same time
-        (confidence_score, conf_latency), (faithfulness_score, faith_latency) = \
+        (confidence_score, _), (faithfulness_score, _) = \
             await asyncio.gather(
                 self._confidence_async(loop, query, response),
                 self._faithfulness_async(loop, query, response),
             )
 
-        wall_latency = time.perf_counter() - wall_t0
+
 
         # scoring — handle partial failures gracefully
         if confidence_score is not None and faithfulness_score is not None:
-            combined = 0.5 * confidence_score + 0.5 * faithfulness_score
+            combined = self.confidence_weight * confidence_score + self.faithfulness_weight * faithfulness_score
             mode     = "confidence+faithfulness (parallel)"
         elif confidence_score is not None:
             combined = confidence_score
@@ -121,8 +138,8 @@ class Gate3:
             "confidence_score":   round(confidence_score,   4) if confidence_score   is not None else None,
             "faithfulness_score": round(faithfulness_score, 4) if faithfulness_score is not None else None,
             "combined_score":     round(combined, 4),
-            "admit_to_cache":     combined >= self.threshold,
-            "mode":               mode,
+            "admit_to_cache": combined >= self.threshold,
+            "mode": mode,
         }
 
     # ── Sync convenience wrapper ──────────────────────────────────────────────

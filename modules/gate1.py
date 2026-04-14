@@ -8,7 +8,7 @@ class ContextGate:
         self.model = T5ForConditionalGeneration.from_pretrained(model_name)
 
         # Keywords that signal a need for context normalization
-        self.context_signals = ["it", "he", "she", "they", "that", "this", "him", "her", "then", "there", "his", "their"]
+        self.context_signals = ["it", "he", "she", "they", "that", "this", "him", "her", "then", "there", "his", "their", "its"]
 
     def _needs_rewriting(self, query):
         """
@@ -26,9 +26,10 @@ class ContextGate:
       # IMPROVEMENT 1: More explicit "Few-Shot" style prompt
       # Small models perform much better when you show them the 'Pattern'
       input_text = (
+          f"Given the following context, rewrite the question to be fully standalone and clear.\n\n"
           f"Context: {last_context}\n"
-          f"Ambiguous Question: {current_query}\n"
-          f"Standalone Question using names from context: "
+          f"Question: {current_query}\n\n"
+          f"Rewritten Question:"
       )
       print(f"[Gate1] Rewriting query: {input_text}")
       inputs = self.tokenizer(input_text, return_tensors="pt")
@@ -48,3 +49,18 @@ class ContextGate:
       # IMPROVEMENT 3: Basic validation
       # If it's still identical, it failed to resolve
       return resolved_query
+
+if __name__ == "__main__":
+    gate1 = ContextGate()
+
+    # Simulate the conversation history
+    history = [
+        "what is the capital of France?",
+        "The capital of France is Paris."
+    ]
+
+    # Ambiguous follow-up query
+    query = "what is its population?"
+
+    result = gate1.rewrite_query(query, history)
+    print(result)
