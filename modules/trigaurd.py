@@ -391,6 +391,7 @@ class TriGuardCache:
         if history:
             history_texts = [msg.response for msg in history]
             normalized_query = self.gate1.rewrite_query(query, history_texts)
+            print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
             if normalized_query != query:
                 print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
                 query = normalized_query
