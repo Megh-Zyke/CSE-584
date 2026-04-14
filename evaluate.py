@@ -13,16 +13,54 @@ import requests
 import time
 import json
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+API_KEYS = [
+    os.environ.get("GOOGLE_API_KEY"),
+    os.environ.get("GOOGLE_API_KEY_2"),
+    os.environ.get("GOOGLE_API_KEY_3"),
+    os.environ.get("GOOGLE_API_KEY_4"),
+    os.environ.get("GOOGLE_API_KEY_5"),
+    os.environ.get("GOOGLE_API_KEY_6"),
+]
+API_KEYS = [k for k in API_KEYS if k]  # remove empty ones
+current_key_idx = 0
 
 BASE_URL = "http://localhost:8000"
 
-def ask(query: str) -> dict:
+def ask(query: str, retry_count: int = 0) -> dict:
+    global current_key_idx
     try:
         response = requests.post(
             f"{BASE_URL}/ask",
             json={"query": query},
             timeout=60
         )
+        if response.status_code == 500:
+            body = response.json()
+            if "429" in str(body):
+                current_key_idx += 1
+                if current_key_idx < len(API_KEYS):
+                    new_key = API_KEYS[current_key_idx]
+                    with open(".env", "r") as f:
+                        env = f.read()
+                    import re
+                    env = re.sub(r"GOOGLE_API_KEY=.*", f"GOOGLE_API_KEY={new_key}", env)
+                    with open(".env", "w") as f:
+                        f.write(env)
+                    print(f"  [KEY] Switched to API key {current_key_idx + 1}/{len(API_KEYS)}")
+                    time.sleep(5)
+                    return ask(query, retry_count)
+                else:
+                    print("  [KEY] All API keys exhausted!")
+                    return {"source": "ERROR", "error": "all_keys_exhausted", "latency_seconds": 0}
+            if "503" in str(body) and retry_count < 3:
+                wait = 15 * (retry_count + 1)
+                print(f"  [503] waiting {wait}s...")
+                time.sleep(wait)
+                return ask(query, retry_count + 1)
         return response.json()
     except Exception as e:
         return {"source": "ERROR", "error": str(e), "latency_seconds": 0}
@@ -42,9 +80,9 @@ def run_evaluation():
     # ── Load dataset ──────────────────────────────────────────
     print("\nLoading dataset...")
     try:
-        df = pd.read_excel("datasets/synthetic_ttl_training_dataset.xlsx")
+        df = pd.read_excel("datasets/evaluation_dataset.xlsx")
     except:
-        df = pd.read_excel("synthetic_ttl_training_dataset.xlsx")
+        df = pd.read_excel("evaluation_dataset.xlsx")
 
     print(f"Total queries: {len(df)}")
     print(f"Columns: {list(df.columns)}")
@@ -56,7 +94,7 @@ def run_evaluation():
     print("PHASE 1 — Populating cache with 500 queries")
     print("=" * 60)
 
-    train_df = df.head(500)
+    train_df = df.head(100)
     phase1_results = []
 
     for i, row in train_df.iterrows():
@@ -70,9 +108,9 @@ def run_evaluation():
             "source": source,
             "latency": result.get("latency_seconds", 0)
         })
-        if i % 50 == 0:
-            print(f"  [{i}/500] {source} — {query[:40]}...")
-        time.sleep(0.5)
+        if i % 10 == 0:
+            print(f"  [{i}/100] {source} — {query[:40]}...")
+        time.sleep(7)
 
     stats_after_p1 = get_stats()
     p1_metrics = stats_after_p1.get("metrics", {})
@@ -87,7 +125,7 @@ def run_evaluation():
     print("PHASE 2 — Running 500 test queries")
     print("=" * 60)
 
-    test_df = df.iloc[500:1000]
+    test_df = df.iloc[100:200]
     results = []
 
     for i, row in test_df.iterrows():
@@ -111,10 +149,10 @@ def run_evaluation():
             "gemini_call": source == "GEMINI_API",
         })
 
-        if (i - 500) % 50 == 0:
-            print(f"  [{i-500}/500] {source} — {latency:.3f}s — {true_category}")
+        if (i - 100) % 10 == 0:
+            print(f"  [{i-100}/100] {source} — {latency:.3f}s — {true_category}")
 
-        time.sleep(0.3)
+        time.sleep(7)
 
     # ── Phase 3: Compute metrics ───────────────────────────────
     print("\n" + "=" * 60)
