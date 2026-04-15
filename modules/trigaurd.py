@@ -332,6 +332,8 @@ class TriGuardCache:
     def call_gemini(self, query: str , history: Optional[List[Message]] = None) -> str:
         try:
             self._api_call_times.append(time.time())
+            load_dotenv(override=True)
+            current_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
             content = []
 
             if history: 
@@ -348,7 +350,7 @@ class TriGuardCache:
                 "role": "user",
                 "parts": [{"text": query}]
             })
-            response = client.models.generate_content(
+            response = current_client.models.generate_content(
                 model="gemini-3-flash-preview",
                 contents=content,
             )

@@ -1,0 +1,101 @@
+query,true_category,source,latency
+What is Meta's current stock price?,Volatile,GEMINI_VOLATILE,3.6627
+What is the best practice for database indexing?,Slow-Moving,GEMINI_VOLATILE,11.6904
+What is the current best practice for injury prevention?,Slow-Moving,GEMINI_API,11.4595
+What happened in the NFL game yesterday?,Volatile,GEMINI_VOLATILE,6.0918
+What is the current inflation rate?,Slow-Moving,GEMINI_VOLATILE,6.0087
+What is the speed of light in km/s?,Static,GEMINI_API,2.2466
+How many teeth do adult humans have?,Static,GEMINI_API,3.3765
+What is the current guideline for blood pressure?,Slow-Moving,GEMINI_API,6.2278
+What is Twitter's stock price right now?,Volatile,GEMINI_VOLATILE,3.2708
+What is the latest update to FERPA?,Slow-Moving,GEMINI_API,9.3126
+What are the most popular testing frameworks?,Slow-Moving,GEMINI_API,9.6285
+What is the chemical symbol for lead?,Static,GEMINI_API,1.5951
+How many protons does oxygen have?,Static,GEMINI_API,1.7537
+What is the bestselling book right now?,Volatile,GEMINI_VOLATILE,6.6996
+What is the longest river in the world?,Static,GEMINI_API,4.586
+What is the latest AI regulation in the EU?,Slow-Moving,GEMINI_API,8.2145
+What is the current interest rate in China?,Slow-Moving,GEMINI_API,6.3249
+What is the latest IPL score?,Volatile,GEMINI_VOLATILE,4.7532
+What is the current gold price per ounce?,Volatile,GEMINI_VOLATILE,4.6366
+What is the Doppler effect?,Static,GEMINI_API,6.3197
+What is the latest cancer survival rate?,Slow-Moving,GEMINI_VOLATILE,8.3176
+What is the weather in Paris today?,Volatile,GEMINI_VOLATILE,3.0805
+How many chromosomes do humans have?,Static,GEMINI_API,3.0098
+What is the current poverty threshold?,Slow-Moving,GEMINI_API,7.1701
+Is it raining in London right now?,Volatile,GEMINI_VOLATILE,3.6735
+Who was Albert Camus?,Static,GEMINI_API,9.0203
+What is the current price of platinum?,Volatile,GEMINI_VOLATILE,5.6409
+What is the current recommendation for XSS prevention?,Slow-Moving,GEMINI_API,9.9636
+What is the latest news from India today?,Volatile,GEMINI_VOLATILE,7.5452
+What is the current FDA approval process?,Slow-Moving,GEMINI_API,10.7882
+What is a control group?,Static,GEMINI_API,13.9317
+What is the latest renewable energy adoption rate?,Slow-Moving,GEMINI_API,8.7285
+What is happening in Venezuela today?,Volatile,GEMINI_VOLATILE,9.9014
+What is the current interest rate in China?,Slow-Moving,REDIS_HIT,0.0493
+When did World War II end?,Static,GEMINI_API,3.2375
+What is cosmic microwave background radiation?,Static,GEMINI_API,8.9024
+What is a supernova?,Static,GEMINI_API,8.179
+What is El Nino?,Static,GEMINI_API,14.766
+What is the S&P 500 at right now?,Volatile,GEMINI_VOLATILE,3.8595
+What are the most popular programming languages right now?,Slow-Moving,GEMINI_API,10.1599
+What is the weather in Sydney today?,Volatile,GEMINI_VOLATILE,3.775
+What are the latest advances in transfer learning?,Slow-Moving,GEMINI_API,12.2369
+What is the live cricket score right now?,Volatile,GEMINI_VOLATILE,4.8965
+Are there any protests happening in DC right now?,Volatile,GEMINI_VOLATILE,7.6836
+What is the recommended approach for AI evaluation?,Slow-Moving,GEMINI_API,10.9912
+What is the current short squeeze happening?,Volatile,GEMINI_VOLATILE,9.5167
+What is the latest version of Terraform?,Slow-Moving,GEMINI_API,4.1881
+What is the current price of Brent crude?,Volatile,GEMINI_VOLATILE,4.4972
+What is the current uranium spot price?,Volatile,GEMINI_VOLATILE,6.031
+Are there any earthquakes happening right now?,Volatile,GEMINI_VOLATILE,5.3553
+What meme stock is surging today?,Volatile,GEMINI_VOLATILE,10.4935
+Who was Charles Darwin?,Static,GEMINI_API,7.2
+What is mutation?,Static,GEMINI_API,8.1002
+What is the current GDPR compliance requirement?,Slow-Moving,GEMINI_API,9.9197
+What is the latest therapy for ADHD?,Slow-Moving,GEMINI_API,9.3508
+What is the median household income in the US?,Slow-Moving,GEMINI_VOLATILE,4.2926
+What is the formula for the area of a circle?,Static,GEMINI_API,2.9522
+What is the current biodiesel price?,Volatile,GEMINI_VOLATILE,8.4177
+What is the current interest rate in Japan?,Slow-Moving,CACHE_HIT_FAST,0.1062
+What is the latest news about North Korea?,Volatile,GEMINI_VOLATILE,9.2106
+What is the formula for kinetic energy?,Static,GEMINI_API,3.0575
+What is the current price of SPY puts?,Volatile,GEMINI_VOLATILE,7.8283
+What is happening in Brazil's politics right now?,Volatile,GEMINI_VOLATILE,12.4827
+What is the score of the Patriots game?,Volatile,GEMINI_VOLATILE,2.7088
+What is the current corporate tax rate?,Slow-Moving,GEMINI_API,6.07
+What is the subconscious mind?,Static,GEMINI_API,9.7143
+What is NVIDIA's stock price right now?,Volatile,GEMINI_VOLATILE,7.6197
+What is the recommended batch size for deep learning?,Slow-Moving,GEMINI_API,13.6766
+What is a crustacean?,Static,GEMINI_API,15.2727
+What is the latest version of Grafana?,Slow-Moving,GEMINI_API,5.2669
+What is the current version of Kubernetes?,Slow-Moving,GEMINI_API,4.2343
+What is the current guideline for alcohol consumption?,Slow-Moving,GEMINI_API,15.3481
+What is the current recommendation for GraphQL vs REST?,Slow-Moving,GEMINI_API,11.4582
+Is it snowing in Denver right now?,Volatile,GEMINI_VOLATILE,3.0912
+What is the current corporate tax rate in Singapore?,Slow-Moving,CACHE_HIT_FAST,0.1518
+What is the uncertainty principle?,Static,GEMINI_API,10.4882
+What is a quark?,Static,GEMINI_API,7.7045
+Who discovered penicillin?,Static,GEMINI_API,4.3451
+What is the current situation in Sudan?,Volatile,GEMINI_VOLATILE,10.531
+What is the singularity?,Static,GEMINI_API,10.6549
+What is the current minimum wage in Washington state?,Slow-Moving,GEMINI_API,5.7661
+What is the current status of peace talks?,Volatile,GEMINI_API,20.418
+What is the current sea level rise rate?,Slow-Moving,GEMINI_VOLATILE,7.476
+What is the weather in Paris today?,Volatile,GEMINI_VOLATILE,4.5073
+What is the current acceptance rate at MIT?,Slow-Moving,GEMINI_API,5.0407
+What is the chemical symbol for iron?,Static,CACHE_HIT_FAST,0.0902
+What is happening in Congress right now?,Volatile,GEMINI_VOLATILE,9.0205
+What is the current weather in London?,Volatile,GEMINI_VOLATILE,2.9636
+What just happened at the summit?,Volatile,GEMINI_VOLATILE,7.9926
+What is the recommended Node.js LTS version?,Slow-Moving,GEMINI_API,5.5974
+What does CPU stand for?,Static,GEMINI_API,1.7951
+What is the latest vaccine mandate news?,Volatile,GEMINI_VOLATILE,10.6285
+What is the current temperature in Tokyo?,Volatile,GEMINI_VOLATILE,2.1181
+What is operant conditioning?,Static,GEMINI_API,8.1839
+What is meiosis?,Static,GEMINI_API,8.2355
+What is mutualism?,Static,GEMINI_API,7.7392
+What is the current price of Ethereum?,Volatile,GEMINI_VOLATILE,6.0684
+What is enthalpy?,Static,GEMINI_API,6.8176
+What is the smallest ocean?,Static,GEMINI_API,3.1304
+Who painted Starry Night?,Static,GEMINI_API,1.9578

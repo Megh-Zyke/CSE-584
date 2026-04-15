@@ -51,8 +51,8 @@ def ask(query: str, retry_count: int = 0) -> dict:
                     with open(".env", "w") as f:
                         f.write(env)
                     print(f"  [KEY] Switched to API key {current_key_idx + 1}/{len(API_KEYS)}")
-                    time.sleep(5)
-                    return ask(query, retry_count)
+                    time.sleep(60)
+                    return ask(query, 0)
                 else:
                     print("  [KEY] All API keys exhausted!")
                     return {"source": "ERROR", "error": "all_keys_exhausted", "latency_seconds": 0}
@@ -72,6 +72,7 @@ def get_stats() -> dict:
         return {}
 
 def run_evaluation():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     print("=" * 60)
     print("TRI-GUARD EVALUATION — All Three Gates")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -119,6 +120,7 @@ def run_evaluation():
     print(f"  Redis keys: {stats_after_p1.get('redis_keys', 0)}")
     print(f"  Gate3 admitted: {p1_metrics.get('gate3_admitted', 'N/A')}")
     print(f"  Gate3 blocked: {p1_metrics.get('gate3_blocked', 'N/A')}")
+    pd.DataFrame(phase1_results).to_csv(f"phase1_results_{timestamp}.csv", index=False)
 
     # ── Phase 2: Test queries (next 500) ──────────────────────
     print("\n" + "=" * 60)
@@ -147,6 +149,10 @@ def run_evaluation():
             "cache_hit": source in ["REDIS_HIT", "CACHE_HIT_FAST", "CACHE_HIT_VERIFIED"],
             "volatile_bypass": source == "GEMINI_VOLATILE",
             "gemini_call": source == "GEMINI_API",
+            "timestamp": datetime.now().isoformat(),
+            "api_call_latency": result.get("api_call_latency", 0),
+            "similarity": result.get("similarity", 0),
+            "gate3_confidence": result.get("confidence", 0),
         })
 
         if (i - 100) % 10 == 0:
@@ -250,8 +256,8 @@ def run_evaluation():
     print(f"{'Cache Hit Latency':<35} {'~100ms':<20} {cache_latency*1000:.0f}ms")
     print(f"{'Category Accuracy':<35} {'N/A':<20} {category_accuracy:.1f}%")
 
-    # ── Save results ──────────────────────────────────────────
-    results_df.to_csv("evaluation_results.csv", index=False)
+    # ── Save results ─────────────────────────────────────────
+    results_df.to_csv(f"evaluation_results_{timestamp}.csv", index=False)
 
     summary = {
         "timestamp": datetime.now().isoformat(),
@@ -276,7 +282,7 @@ def run_evaluation():
         "source_breakdown": results_df["source"].value_counts().to_dict()
     }
 
-    with open("evaluation_summary.json", "w") as f:
+    with open(f"evaluation_summary_{timestamp}.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     print(f"\n✅ Saved: evaluation_results.csv")
