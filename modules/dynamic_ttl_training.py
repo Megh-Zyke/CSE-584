@@ -47,7 +47,7 @@ TTL_DISPLAY: dict[str, str] = {
 ENCODER_NAME   = "BAAI/bge-small-en-v1.5"
 MODEL_SAVE_PATH = "ttl_classifier.joblib"
 
-CONFIDENCE_THRESHOLD = 0.60
+CONFIDENCE_THRESHOLD = 0.40
 
 FALLBACK_LABEL = "Volatile"
 
