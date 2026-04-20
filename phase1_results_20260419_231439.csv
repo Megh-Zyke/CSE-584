@@ -1,0 +1,151 @@
+query,true_category,source,latency
+What is the speed of light in a vacuum?,Static,GEMINI_API,2.9241
+What is the chemical formula for water?,Static,GEMINI_API,2.2975
+How many bones are in the adult human body?,Static,GEMINI_API,2.2366
+What is Newton's second law of motion?,Static,GEMINI_API,7.7121
+What is the Pythagorean theorem?,Static,GEMINI_API,4.9791
+What is the atomic number of carbon?,Static,GEMINI_API,2.0625
+What is photosynthesis?,Static,GEMINI_API,7.1912
+What is the theory of general relativity?,Static,GEMINI_API,10.8714
+What is DNA?,Static,GEMINI_API,4.9768
+What is the second law of thermodynamics?,Static,CACHE_HIT_FAST,0.3178
+What is the role of mitochondria in a cell?,Static,GEMINI_API,6.0509
+What is the central dogma of molecular biology?,Static,GEMINI_API,4.1014
+What is the structure of the periodic table?,Static,GEMINI_API,12.8235
+What is Ohm's law?,Static,GEMINI_API,9.096
+What is the Big Bang theory?,Static,GEMINI_API,6.4992
+What does 'habeas corpus' mean?,Static,GEMINI_API,3.2717
+What is the presumption of innocence?,Static,GEMINI_API,4.0698
+What is the difference between civil and criminal law?,Static,GEMINI_API,8.1632
+What is the principle of stare decisis?,Static,GEMINI_API,6.7771
+What is the difference between a tort and a crime?,Static,CACHE_HIT_FAST,0.1218
+What is a black hole?,Static,GEMINI_API,12.5044
+What is the speed of sound in air?,Static,GEMINI_API,4.1002
+What is cellular respiration?,Static,GEMINI_API,7.5444
+What is the greenhouse effect?,Static,GEMINI_API,6.3608
+What is CRISPR-Cas9?,Static,GEMINI_API,9.0031
+What is the law of conservation of energy?,Static,GEMINI_API,5.5179
+What is osmosis?,Static,GEMINI_API,4.2848
+What is the difference between mitosis and meiosis?,Static,GEMINI_API,7.4997
+What is the placebo effect?,Static,GEMINI_API,6.374
+What is the human genome?,Static,CACHE_HIT_FAST,0.0708
+What is the boiling point of water at sea level?,Static,GEMINI_API,2.9927
+What is the difference between an acid and a base?,Static,GEMINI_API,9.9057
+What is the electromagnetic spectrum?,Static,GEMINI_API,10.8477
+What is a neuron?,Static,GEMINI_API,6.1785
+What is gravity?,Static,GEMINI_API,5.4591
+What is the immune system?,Static,GEMINI_API,12.795
+What is a blockchain?,Static,GEMINI_API,9.0567
+What is quantum entanglement?,Static,GEMINI_API,8.0767
+What is insulin?,Static,GEMINI_API,8.5028
+What is the Miranda warning in US law?,Static,GEMINI_API,7.3483
+What is Avogadro's number?,Static,GEMINI_API,3.1673
+What is the placebo-controlled trial?,Static,CACHE_HIT_FAST,0.075
+What is common law?,Static,GEMINI_API,6.8067
+What is Euclidean geometry?,Static,GEMINI_API,8.3405
+What is the role of the liver in the human body?,Static,GEMINI_API,10.7396
+What is due process in US law?,Static,GEMINI_API,8.967
+What is the difference between kinetic and potential energy?,Static,GEMINI_API,8.5355
+What is triage in medicine?,Static,GEMINI_API,8.9987
+What is the rule of law?,Static,CACHE_HIT_FAST,0.0757
+What is entropy in thermodynamics?,Static,GEMINI_API,7.8346
+What are the GDPR data retention requirements for EU businesses?,Slow-Moving,GEMINI_API,12.5325
+What are HIPAA's requirements for protecting patient health information?,Slow-Moving,GEMINI_API,14.2526
+What is the current Python version and its key features?,Slow-Moving,GEMINI_API,8.7301
+What does the OpenAI API's chat completions endpoint support?,Slow-Moving,GEMINI_API,12.4967
+What are the requirements to become a licensed physician in the United States?,Slow-Moving,GEMINI_VOLATILE,16.4442
+What is the current EU AI Act and what does it regulate?,Slow-Moving,GEMINI_API,13.3356
+What is ISO 27001 and what does it require?,Slow-Moving,GEMINI_VOLATILE,14.1783
+What are the FDA's drug approval requirements in the US?,Slow-Moving,GEMINI_API,12.572
+What are the key provisions of the Americans with Disabilities Act (ADA)?,Slow-Moving,GEMINI_VOLATILE,9.6561
+What does the California Consumer Privacy Act (CCPA) require from businesses?,Slow-Moving,GEMINI_API,11.4219
+What is the current Kubernetes release and major features?,Slow-Moving,GEMINI_API,16.3294
+What is TLS 1.3 and how does it improve on TLS 1.2?,Slow-Moving,GEMINI_API,12.4321
+What are the current US medical malpractice liability standards?,Slow-Moving,GEMINI_API,9.8415
+What are OSHA's requirements for workplace safety?,Slow-Moving,GEMINI_API,15.0288
+What are the key requirements of the Sarbanes-Oxley Act?,Slow-Moving,GEMINI_API,18.4794
+What does PCI DSS require for handling credit card data?,Slow-Moving,GEMINI_VOLATILE,7.8748
+What are the current nursing practice standards in the US?,Slow-Moving,GEMINI_API,12.1369
+What is OAuth 2.0 and how does it work?,Slow-Moving,GEMINI_API,12.982
+What are the key features of the React 19 release?,Slow-Moving,GEMINI_API,3.3982
+What are the current SEC regulations for insider trading?,Slow-Moving,GEMINI_API,11.9042
+What does FERPA require for student education records?,Slow-Moving,GEMINI_VOLATILE,12.869
+What are the main provisions of the Affordable Care Act (ACA)?,Slow-Moving,GEMINI_VOLATILE,13.5971
+What are the key features of PostgreSQL 16?,Slow-Moving,GEMINI_VOLATILE,10.3095
+What is FMLA and what are its requirements?,Slow-Moving,GEMINI_VOLATILE,12.7191
+What are the current WHO guidelines for antibiotic use?,Slow-Moving,GEMINI_API,12.5654
+What is the CAN-SPAM Act?,Slow-Moving,GEMINI_API,7.4123
+What is the Basel III framework for banks?,Slow-Moving,GEMINI_API,13.4332
+What are the requirements for WCAG 2.1 AA accessibility compliance?,Slow-Moving,GEMINI_API,33.9376
+What are the key features of Docker Compose v2?,Slow-Moving,GEMINI_VOLATILE,9.9934
+What does the Clean Air Act require of industrial facilities?,Slow-Moving,GEMINI_API,12.1437
+What are the data localization requirements in Russia's Federal Law No. 242-FZ?,Slow-Moving,GEMINI_API,11.8829
+What are the key provisions of the Fair Labor Standards Act (FLSA)?,Slow-Moving,GEMINI_API,13.122
+What is the NIST Cybersecurity Framework?,Slow-Moving,GEMINI_VOLATILE,14.449
+What are the requirements for SOC 2 compliance?,Slow-Moving,GEMINI_API,11.3371
+What is the Electronic Communications Privacy Act (ECPA)?,Slow-Moving,GEMINI_VOLATILE,7.8201
+What are the key features of Java 21 LTS?,Slow-Moving,GEMINI_API,17.6692
+What is the Health Information Technology for Economic and Clinical Health (HITECH) Act?,Slow-Moving,GEMINI_VOLATILE,8.9025
+What is the EU's Digital Markets Act?,Slow-Moving,GEMINI_VOLATILE,11.6957
+What is Terraform and how does it work?,Slow-Moving,GEMINI_API,13.6461
+What does the Drug Enforcement Administration (DEA) schedule system classify?,Slow-Moving,GEMINI_API,10.1277
+What are the current requirements under the Dodd-Frank Wall Street Reform Act for derivatives?,Slow-Moving,CACHE_HIT_FAST,0.1006
+What is GraphQL and how does it differ from REST?,Slow-Moving,GEMINI_API,18.1457
+What is the US Foreign Corrupt Practices Act (FCPA)?,Slow-Moving,GEMINI_API,14.23
+What are the requirements under the Mental Health Parity and Addiction Equity Act?,Slow-Moving,GEMINI_API,17.7251
+What is WebAssembly (WASM)?,Slow-Moving,GEMINI_API,12.4158
+What does the Anti-Money Laundering (AML) framework require of financial institutions?,Slow-Moving,GEMINI_API,9.9778
+What are the current regulations governing autonomous vehicles in the US?,Slow-Moving,GEMINI_API,18.8765
+What is the MITRE ATT&CK framework?,Slow-Moving,GEMINI_VOLATILE,12.4236
+What are the key requirements of the NYDFS Cybersecurity Regulation (23 NYCRR 500)?,Slow-Moving,GEMINI_API,10.4648
+What is the Children's Online Privacy Protection Act (COPPA)?,Slow-Moving,GEMINI_VOLATILE,8.7384
+What is the current price of Apple (AAPL) stock?,Volatile,GEMINI_VOLATILE,3.4031
+What is the current federal funds rate set by the Federal Reserve?,Volatile,GEMINI_API,2.5696
+What is the current Bitcoin price?,Volatile,GEMINI_VOLATILE,3.9148
+What are the latest US CPI inflation figures?,Volatile,GEMINI_VOLATILE,4.6622
+What is the current EUR/USD exchange rate?,Volatile,GEMINI_VOLATILE,2.1942
+What is the current S&P 500 index level?,Volatile,GEMINI_VOLATILE,2.6879
+What is the latest news on the US-China trade relationship?,Volatile,GEMINI_VOLATILE,23.9374
+What is the current unemployment rate in the United States?,Volatile,GEMINI_API,2.1562
+What are the latest quarterly earnings results for Microsoft?,Volatile,GEMINI_VOLATILE,3.622
+What is the current price of gold per ounce?,Volatile,GEMINI_VOLATILE,2.4038
+What is the current 10-year US Treasury yield?,Volatile,GEMINI_VOLATILE,3.1509
+What is the latest on the Ukraine-Russia conflict?,Volatile,GEMINI_VOLATILE,9.5915
+What is the current oil price (WTI crude)?,Volatile,GEMINI_VOLATILE,3.9978
+What are the latest updates on AI regulation in the United States?,Volatile,CACHE_HIT_FAST,0.068
+What are the latest COVID-19 variant developments?,Volatile,GEMINI_API,9.104
+What is the latest news on the Federal Reserve's interest rate decisions?,Volatile,GEMINI_VOLATILE,2.3851
+What is the current market cap of Nvidia?,Volatile,GEMINI_VOLATILE,2.901
+What are the latest drug approvals by the FDA?,Volatile,CACHE_HIT_FAST,0.0702
+What is the current state of US housing market prices?,Volatile,GEMINI_VOLATILE,11.8134
+What is the latest news on OpenAI's model releases?,Volatile,GEMINI_API,6.1283
+What is the current inflation rate in the Eurozone?,Volatile,GEMINI_API,4.2266
+What is the latest news on Tesla's stock and business performance?,Volatile,GEMINI_VOLATILE,4.6896
+What are the latest changes to US immigration policy?,Volatile,GEMINI_API,17.36
+What are the latest updates on clinical trials for Alzheimer's disease?,Volatile,GEMINI_API,16.5695
+What is the latest on US fiscal deficit and debt ceiling negotiations?,Volatile,GEMINI_API,9.1238
+What is the current state of the commercial real estate market?,Volatile,GEMINI_VOLATILE,11.3616
+What is the latest news on Meta's AI developments?,Volatile,GEMINI_VOLATILE,9.4154
+What is the current US GDP growth rate?,Volatile,GEMINI_API,2.803
+What are the latest developments in the Middle East conflict?,Volatile,GEMINI_VOLATILE,3.4941
+What is the latest news on Google's antitrust cases?,Volatile,GEMINI_VOLATILE,14.0196
+What are the latest updates on the avian flu outbreak?,Volatile,GEMINI_VOLATILE,11.236
+What is the current price of Amazon (AMZN) stock?,Volatile,GEMINI_VOLATILE,2.4031
+What are the latest quarterly earnings for Google (Alphabet)?,Volatile,GEMINI_VOLATILE,3.0807
+What is the current Dow Jones Industrial Average?,Volatile,GEMINI_VOLATILE,2.2749
+What is the latest news on US-EU trade relations?,Volatile,GEMINI_VOLATILE,9.3906
+What are the latest developments in the Russia-Ukraine war?,Volatile,GEMINI_VOLATILE,2.462
+What is the latest news on AI chip export controls?,Volatile,GEMINI_VOLATILE,8.5118
+What is the current price of Ethereum (ETH)?,Volatile,GEMINI_VOLATILE,3.0422
+What are the latest FDA warnings or drug recalls?,Volatile,GEMINI_VOLATILE,3.1483
+What is the current status of the US banking sector?,Volatile,GEMINI_API,16.184
+What is the latest news on quantum computing breakthroughs?,Volatile,GEMINI_VOLATILE,10.7166
+What are the latest changes to immigration visa policies?,Volatile,CACHE_HIT_FAST,0.0952
+"What is the current market share of cloud providers (AWS, Azure, GCP)?",Volatile,GEMINI_API,7.0104
+What are the latest updates to the Paris Climate Agreement commitments?,Volatile,GEMINI_API,10.9868
+What is the latest on the global semiconductor shortage?,Volatile,GEMINI_VOLATILE,9.3836
+What are the latest developments in nuclear fusion energy?,Volatile,GEMINI_VOLATILE,18.2197
+What is the current status of the US CHIPS Act semiconductor funding?,Volatile,GEMINI_API,13.4268
+What are the latest COVID-19 booster recommendations?,Volatile,GEMINI_API,13.1657
+What is the current state of US-China semiconductor rivalry?,Volatile,GEMINI_VOLATILE,11.5638
+What is the latest news on Amazon AWS product launches?,Volatile,GEMINI_VOLATILE,4.262
