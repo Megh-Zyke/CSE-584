@@ -148,19 +148,19 @@ Ollama is required for Gate 3 (async SLM judge). Install and pull the model:
 
 ## Set up
 
-``bash
+```bash
 redis-server --port 6379 --bind 127.0.0.1 &
 module load ollama
 ollama pull qwen2.5:1.5b
 ollama pull llama3.2
 ollama serve &
-``
+```
 
-``python
+```python
 python server.py 
 #Server runs at localhost:8000
-``
+```
 
-``python
+```python
 python evaluation.py
-``
+```
