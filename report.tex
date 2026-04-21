@@ -5,7 +5,12 @@
     Bib\TeX}}}
 
 \setcopyright{none}
-\settopmatter{printacmref=false}
+\settopmatter{printacmref=false, printccs=false, printfolios=true}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\acmConference{}{}{}
+\acmYear{}
+\acmDOI{}
+\usepackage{fancyhdr}
 
 \begin{document}
 
@@ -41,6 +46,11 @@ As the adoption of Generative AI via API gateways accelerates, the latency and f
 \keywords{Semantic Caching, Large Language Models, Pythagorean Fuzzy Sets, Temporal Classification, Context Normalization, Dual SLM Verification, Chroma DB}
 
 \maketitle
+
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[LO]{Soni, Gejjela, and Padidala}
+\fancyhead[RE]{TriGuard: Validity Aware Caching for Gen AI}
 
 \section{Introduction}
 
@@ -113,12 +123,13 @@ Here, $\mu$ represents the explicit degree of semantic equivalence, $\nu$ repres
 
 The Tri-Guard architecture is constructed around a highly optimized dual-storage paradigm integrated with three deeply specialized sequential gates. Our system separates fast exact-match lookups from complex semantic evaluations. Figure \ref{fig:architecture} demonstrates the rigorous data flow pipeline from the user's prompt through cache validation.
 
-\begin{figure*}[ht]
+
+\begin{figure}[!h]
     \centering
-    \vspace{7cm} % Adjust to fit the architecture diagram height
+    \includegraphics[width=1\linewidth]{flowchart.jpg}
     \caption{The Tri-Guard Architectural Flow. Queries pass through Context Normalization, are assigned cache lifetimes via Temporal TTL Classification, undergo semantic evaluation in Dual Storage via PyFS, and new answers are ultimately audited by an asynchronous Dual SLM Verification layer.}
     \label{fig:architecture}
-\end{figure*}
+\end{figure}
 
 \subsection{Gate 1: Context Normalization}
 Natural language interactions within Generative AI form continuous dialogue sessions, making individual queries contextually dependent. Isolated queries arriving at the cache layer (e.g., "When was he born?") are inherently ambiguous and dilute embedding quality within the vector store.
@@ -128,11 +139,45 @@ Tri-Guard intercepts incoming traffic via \textbf{Context Normalization} (Gate 1
 \subsection{Gate 2: Temporal Classification (TTL)}
 The second boundary prevents the caching of fundamentally transient data. The \textbf{Temporal Classification} gate acts as the Time-To-Live (TTL) governor. Instead of uniformly caching every LLM generation, Tri-Guard utilizes a serialized Machine Learning classifier (\texttt{ttl\_classifier.joblib}) trained specifically to infer the temporal half-life of a semantic intent. 
 
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{TTL Graph.png}
+    \caption{Custom Model Selectivity}
+    \label{fig:placeholder}
+\end{figure}
+
+
 \begin{itemize}
     \item \textbf{Static/Slow-Moving Data:} Queries such as "What is the capital of Japan?" are assigned a "Static" class (infinite lifespan, $TTL = -1$) or a "Slow-Moving" class (e.g., 3 to 30 days expiry).
     \item \textbf{Volatile Data:} Queries containing implicit transiency (e.g., "What is the current stock price of TSLA?" or "What is the weather right now?") are explicitly flagged as "Volatile". 
 \end{itemize}
 Crucially, if Gate 2 identifies a "Volatile" query, Tri-Guard \textit{completely bypasses the semantic cache} (Chroma DB) and routes the request directly to the upstream GenAI model (e.g., Gemini). Serving a stale semantic cache hit for a live sports score or stock ticker is a catastrophic failure; Gate 2 structurally guarantees safety against hallucinatory chronological caching by mapping expiry constraints to the intent itself.
+
+\begin{table}[t]
+\caption{Performance of the Adaptive TTL Classifier across data volatility categories.}
+\label{tab:ttl_classifier}
+\centering
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Category} & \textbf{TP} & \textbf{TN} & \textbf{FP} & \textbf{FN} & \textbf{Recall} & \textbf{F1} \\
+\midrule
+Volatile      & 32 & 60 & 7 & 1  & 0.970 & 0.889 \\
+Static        & 16 & 63 & 1 & 20 & 0.444 & 0.604 \\
+Slow-Moving   & 12 & 68 & 1 & 19 & 0.387 & 0.545 \\
+\bottomrule
+\end{tabular}
+\vspace{-4mm}
+\end{table}
+
+
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=1\linewidth]{Training Graph TTL.png}
+    \caption{Training pipeline for training the embeddings of the custom TTL model which uses Logistic Regression over the text embeddings of the tokenizer for results with a good balance of accuracy and latency}
+    \label{fig:placeholder}
+\end{figure}
 
 \subsection{Dual Storage Search (Redis \& Chroma DB)}
 For queries approved for caching, Tri-Guard executes a highly parallelized dual-database lookup utilizing asynchronous \texttt{get\_event\_loop()} executions.
@@ -143,7 +188,16 @@ Redis functions as an ultra-low latency physical hash match. Tri-Guard applies a
 \textbf{Chroma DB \& Embedding LRU (The Semantic Vector Store):} 
 Simultaneously, the query is embedded via the \texttt{all-MiniLM-L6-v2} (or \texttt{bge-small-en-v1.5}) model. To drastically reduce latency overhead, Tri-Guard maintains an application-layer Least Recently Used (LRU) embedding cache holding the last 1,024 vector tensors. If the string has been embedded recently, pulling the cached tensor saves approximately 120 milliseconds of forward-pass inference. 
 
-The embedded vector is dispatched to a persistent Chroma DB instance utilizing approximate nearest neighbor search via normalized cosine space (\texttt{hnsw:space: cosine}). However, the retrieved candidates are simply considered mathematical 'potentials'. Tri-Guard immediately pipelines these candidates through our mathematical PyFS conversion (Section 3). High similarity vectors (Cosine $> 0.80$) are accepted via a "Fast Path", while closer, overlapping vectors are reranked via PyFS parameters enforcing strict non-membership/contradiction tolerances ($\nu \leq 0.35$). 
+The embedded vector is dispatched to a persistent Chroma DB instance utilizing approximate nearest neighbor search via normalized cosine space (\texttt{hnsw:space: cosine}). However, the retrieved candidates are simply considered mathematical 'potentials'. Tri-Guard immediately pipelines these candidates through our mathematical PyFS conversion (Section 3). High similarity vectors (Cosine $> 0.80$) are accepted via a "Fast Path", while closer, overlapping vectors are reranked via PyFS parameters enforcing strict non-membership/contradiction tolerances ($\nu \leq 0.35$).
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{Semantic Similarity Pipeline.png}
+    \caption{Semantic Similarity comparison pipeline which include an additional PyFS to ensure more robustness over traditional Cosine Similarity}
+    \label{fig:placeholder}
+\end{figure}
+
+
 
 \subsection{Gate 3: Asynchronous SLM Verification}
 The final stop for protecting the integrity of the cache is \textbf{Gate 3: Dual SLM Verification}. Unlike Gates 1 and 2 which operate before cache retrieval, Gate 3 operates as an asynchronous backward-facing firewall \textit{after} the primary GenAI LLM (Gemini) generates a fresh response for a cache miss.
@@ -175,13 +229,22 @@ The realization of the Tri-Guard architecture adheres to several strict software
 To rigorously test the efficacy of the Tri-Guard architecture, we construct an extensive evaluation framework designed to benchmark cache hit rates, false-positive mitigation, and end-to-end latency overhead against leading baseline systems. This section outlines our experimental design, synthetic workload generation, and the core metrics utilized for empirical analysis.
 
 \subsection{Experimental Design and Baselines}
-We structure our experiments as a comparative analysis across multiple dimensions of caching difficulty. We benchmark Tri-Guard against two primary baselines:
+
+We structure our experiments as a comparative analysis across multiple dimensions of caching difficulty. We benchmark Tri-Guard against the following baselines:
+
 \begin{enumerate}
-    \item \textbf{No Cache}: A direct pass-through to the upstream GenAI LLM API, establishing the baseline upper bound for latency and API financial cost.
     \item \textbf{Standard GPTCache (Cosine-Only)}: A classical single-stage dense retrieval cache utilizing standard dense embeddings with a static cosine similarity threshold set to $0.85$. This represents the current industry standard.
+
+    \item \textbf{LangCache}: A semantic caching framework that emphasizes fast embedding-based retrieval with lightweight optimizations for latency. However, it lacks explicit mechanisms for context disambiguation, temporal awareness, or response quality validation.
+
+    \item \textbf{Asteria}: A recent validation-driven caching framework that employs an LLM-based judging mechanism to verify cache hits. While it improves correctness, it incurs significant computational overhead and does not explicitly model temporal staleness.
+
+    \item \textbf{MeanCache}: A simplified statistical baseline that aggregates responses based on embedding similarity and averages or selects representative outputs. This approach serves as a proxy for heuristic-based caching without explicit validation or temporal controls.
+
+    \item \textbf{ContextCache}: A context-aware caching system designed to improve multi-turn dialogue coherence by incorporating conversational history into cache retrieval. However, it does not address hallucination filtering or adaptive expiration of cached responses.
 \end{enumerate}
 
-To ensure fairness, all local inference operations are executed on identical hardware infrastructure (NVIDIA RTX 3090, Intel i9 processors). The upstream GenAI API is simulated to measure direct throughput independent of external network queuing constraints.
+All our evaluations were run using Greatlakes Clusters with A100 40 GB GPUs. The upstream GenAI API is simulated to measure direct throughput independent of external network queuing constraints.
 
 \subsection{Synthetic Workload Generation}
 Evaluating semantic caches necessitates realistic query access patterns. Real-world API traffic is rarely uniformly distributed; it follows a power-law distribution where a small handful of topics (the "hot" keys) generate the vast majority of traffic, surrounded by a massive "long tail" of unique queries.
@@ -197,37 +260,67 @@ We judge the efficacy of Tri-Guard across three primary axes:
 \end{itemize}
 
 \subsection{Quantitative Results and Analytics}
-\textit{[Space reserved for two pages of detailed quantitative results, confusion matrices, latency histograms, and ablative analysis of individual gates.]}
 
-\begin{figure*}[h]
+We evaluate TriGuard against existing semantic caching systems across API reduction, effective hit rate, latency, miss overhead, and cache integrity. While baseline approaches such as GPTCache and LangCache achieve higher API reduction ($\approx 65\%$ and $\approx 70\%$, respectively), TriGuard maintains competitive reduction ($\sim 58\%$) while explicitly prioritizing response validity over aggressive cache reuse. This design choice is further reflected in the effective hit rate, where TriGuard ($\sim 44\%$) trails GPTCache ($\sim 65\%$) and Asteria ($\sim 85\%$); however, this reduction is intentional, stemming from stricter filtering of contextually ambiguous and low-confidence responses. Unlike naive similarity-based systems, TriGuard’s gating mechanisms ensure that only semantically grounded and high-confidence outputs are reused.
+
+\begin{figure}[!h]
     \centering
-    % Placeholder for a wide, two-column evaluation graph
-    \vspace{6cm}
-    \caption{Placeholder: Hit Rate vs. Threshold Tolerance across adversarial workloads. Tri-Guard's use of PyFS and Dual SLM Verification drastically lowers the False Positive Rate compared to single-stage cosine similarity.}
-    \label{fig:results_main}
-\end{figure*}
+    \includegraphics[width=1\linewidth]{API Reduction.png}
+    \caption{API Reduction across models }
+    \label{fig:placeholder}
+\end{figure}
 
-\subsection{Latency Profiling and Ablation Studies}
-\textit{[Detailed discussion on the microsecond profiling of Redis lookups vs Chroma DB ANN, and evaluation of the system's performance if Dual SLM Verification is disabled vs enabled.]}
+Crucially, this trade-off results in improved reliability. TriGuard achieves a lower staleness/false positive rate ($\sim 7\%$) compared to GPTCache ($\sim 10\%$), directly mitigating hallucination propagation and temporal drift, which are key failure modes identified in prior work. In terms of system efficiency, TriGuard demonstrates balanced latency characteristics, with warm hit latency ($\sim 75$ ms) and cold hit latency ($\sim 210$ ms) remaining within practical bounds and comparable to existing systems. Furthermore, its miss overhead ($\sim 75$ ms) is significantly lower than ContextCache ($\sim 600$ ms) and remains competitive with Asteria, indicating that the additional validation layers do not introduce prohibitive computational cost.
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=1\linewidth]{Effective hit rate.png}
+    \caption{Effective hit rate across models}
+    \label{fig:placeholder}
+\end{figure}
 
-\vfill\eject
-\textit{[Page 2 of reserved Results and Evaluation Section]}
 
-\begin{table}[h]
-    \caption{Placeholder: End-to-end performance comparison across multiple test synthetic data regimes.}
+\begin{table*}[h]
+    \caption{End-to-end performance comparison of TriGuard against baseline semantic caching systems.}
     \label{tab:evaluation}
     \centering
-    \begin{tabular}{lccc}
+    \begin{tabular}{lcccc}
         \toprule
-        \textbf{Architecture} & \textbf{Hit Rate \%} & \textbf{False Positive \%} & \textbf{P99 Latency (ms)} \\
+        \textbf{Architecture} & \textbf{Eff. Hit Rate (\%)} & \textbf{False Pos. (\%)} & \textbf{Miss Overhead (ms)} & \textbf{Cold Latency (ms)} \\
         \midrule
-        No Cache & 0.0 & 0.0 & 3500 \\
-        GPTCache ($cosine=0.85$) & 68.4 & 14.2 & 15 \\
-        GPTCache ($cosine=0.95$) & 22.1 & 4.1 & 15 \\
-        Tri-Guard (Ours) & \textbf{65.2} & \textbf{0.8} & \textbf{145} \\
+        No Cache & 0.0 & 0.0 & 0 & $\sim$3500 \\
+        GPTCache & $\sim$65 & $\sim$10 & $\sim$20 & $\sim$100 \\
+        LangCache & $\sim$48 & -- & $\sim$15 & -- \\
+        Asteria & $\sim$85 & -- & $\sim$80 & $\sim$210 \\
+        ContextCache & $\sim$40 & -- & $\sim$600 & $\sim$140 \\
+        TriGuard (Ours) & \textbf{$\sim$44} & \textbf{$\sim$7} & \textbf{$\sim$75} & \textbf{$\sim$210} \\
         \bottomrule
     \end{tabular}
-\end{table}
+\end{table*}
+
+Overall, TriGuard achieves a more principled balance between performance and correctness by slightly sacrificing hit rate and API reduction in exchange for substantially improved cache integrity. These results validate the effectiveness of its three-gate architecture—context normalization, adaptive TTL classification, and confidence-based quality control—in enabling reliable, enterprise-grade semantic caching.
+
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=1\linewidth]{Miss overhead — excl. LLM call.png}
+    \caption{Miss overhead across models}
+    \label{fig:placeholder}
+\end{figure}
+
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=1\linewidth]{Staleness_False Positive Rate.png}
+    \caption{False Positive Rate across models}
+    \label{fig:placeholder}
+\end{figure}
+
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=1\linewidth]{Warm hit latency (ms) and Cold hit latency (ms).png}
+    \caption{Hit Latencies across various works across models}
+    \label{fig:placeholder}
+\end{figure}
+
+
 
 \section{Discussion and Limitations}
 
@@ -244,39 +337,55 @@ Tri-Guard fundamentally restructures this process. By distributing the workload 
 \begin{thebibliography}{9}
 
 \bibitem{bang2023gptcache}
-Bang, Y., et al. 2023.
-\newblock \textit{A multitask, multilingual, multimodal evaluation of ChatGPT on reasoning, hallucination, and interactivity.}
-\newblock arXiv preprint arXiv:2302.04023 (Includes GPTCache frameworks).
+F. Bang, et al. 2023.
+\newblock \textit{GPTCache: An Open-Source Semantic Cache for LLM Applications.}
+\newblock In \textit{Proceedings of the 5th Workshop on Open-Source Arabic Corpora and Processing Tools (NLP-OSS) @ EMNLP}.
 
 \bibitem{meancache2024}
-Anonymous Authors. 2024.
-\newblock \textit{MeanCache: Efficient Embedding Thresholding for NLP Workloads.}
-\newblock In \textit{Proceedings of Semantic Caching Sys.}
+W. Gill, et al. 2024.
+\newblock \textit{MeanCache: User-Centric Semantic Cache for Large Language Model Based Web Services.}
+\newblock In \textit{Proceedings of the IEEE/ACM International Symposium on Quality of Service (IWQoS)}.
 
-\bibitem{siso2025}
-Anonymous Authors. 2025.
-\newblock \textit{SISO: Bandwidth-Aware Semantic Eviction and Dynamic Thresholding.}
-\newblock \textit{Journal of Dynamic Caching}.
-
-\bibitem{liu2025cost}
-Liu et al. 2025.
-\newblock \textit{Cost-aware Semantic Caching with Multi-Armed Bandits.}
-\newblock \textit{Transactions on Machine Learning Systems}.
-
-\bibitem{langcache2025}
-Anonymous Authors. 2025.
-\newblock \textit{LangCache: Domain-Specific Contrastive Fine-Tuning for Large Language Models.}
-\newblock \textit{Systems for ML}.
-
-\bibitem{krites2026}
-Krites et al. 2026.
-\newblock \textit{Asynchronous LLM Judges for Borderline Cosine Score Verification.}
-\newblock In \textit{Proceedings of Verification Architecture}.
+\bibitem{liu2023semantic}
+X. Liu, et al. 2023.
+\newblock \textit{Semantic Caching for Low-Cost LLM Serving: From Offline Learning to Online Adaptation.}
+\newblock \textit{arXiv preprint arXiv:2312.06734} (Presented at ICLR 2024).
 
 \bibitem{spherelfu2026}
-Anonymous Authors. 2026.
-\newblock \textit{SphereLFU: Kernel Density Estimation for Vector Eviction in Semantic Caches.}
-\newblock \textit{AI Systems Journal}.
+% Reference for SphereLFU
+D. Biton, R. Friedman.
+\newblock \textit{From Exact Hits to Close Enough: Semantic Caching for LLM Embeddings.}
+\newblock \textit{arXiv preprint arXiv:2603.03301}.
+
+\bibitem{redis2025langcache}
+Redis. 2025.
+\newblock \textit{LangCache: Managed Semantic Caching for LLM Applications.}
+\newblock [Online]. Available: \url{https://redis.io/blog/langcache-public-preview/}.
+
+\bibitem{krites2026}
+A. Singh, et al. 2026.
+\newblock \textit{Asynchronous Verified Semantic Caching for Tiered LLM Architectures.}
+\newblock \textit{arXiv preprint arXiv:2602.13165}.
+
+\bibitem{izacard2021fid}
+G. Izacard and E. Grave. 2021.
+\newblock \textit{Leveraging Passage Retrieval with Generative Models for Open Domain Question Answering.}
+\newblock In \textit{Proceedings of the 16th Conference of the European Chapter of the Association for Computational Linguistics (EACL)}.
+
+\bibitem{wang2023ann}
+M. Wang, X. Xu, Q. Yue, and Y. Wang. 2023.
+\newblock \textit{A Comprehensive Survey on Approximate Nearest Neighbor Search.}
+\newblock \textit{IEEE Transactions on Knowledge and Data Engineering (TKDE)}.
+
+\bibitem{lewis2020rag}
+P. Lewis, et al. 2020.
+\newblock \textit{Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.}
+\newblock In \textit{Advances in Neural Information Processing Systems (NeurIPS)}.
+
+\bibitem{johnson2019faiss}
+J. Johnson, M. Douze, and H. Jégou. 2019.
+\newblock \textit{Billion-scale similarity search with GPUs.}
+\newblock \textit{IEEE Transactions on Big Data}.
 
 \end{thebibliography}
 
