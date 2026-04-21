@@ -20,6 +20,7 @@ import threading
 from modules.gate3 import Gate3
 from dotenv import load_dotenv
 from typing import Optional
+from openai import OpenAI
 load_dotenv()
 _executor = ThreadPoolExecutor(max_workers=4)
 client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
@@ -79,23 +80,28 @@ class TriGuardCache:
         print(f"[ChromaDB] {count} entries loaded from disk")
 
         print("Connecting to Redis...")
+
+        self.redis = None  # default safe fallback
+
         try:
-            redis_url = os.environ.get("REDIS_URL")
-            if redis_url:
-                redis_url = redis_url.strip('"').strip("'")
-                self.redis = redislib.Redis.from_url(redis_url, decode_responses=True)
-            else:
-                self.redis = redislib.Redis(
-                    host=os.environ.get("REDIS_HOST", "localhost"),
-                    port=int(os.environ.get("REDIS_PORT", 6379)),
-                    password=os.environ.get("REDIS_PASSWORD", None),
-                    decode_responses=True
-                )
+            # Always prefer local Redis on cluster
+            host = os.environ.get("REDIS_HOST", "127.0.0.1")
+            port = int(os.environ.get("REDIS_PORT", 6379))
+
+            self.redis = redislib.Redis(
+                host=host,
+                port=port,
+                decode_responses=True
+            )
+
             self.redis.ping()
-            print("[Redis] Connected")
+            print(f"[Redis] Connected → {host}:{port}")
+
         except Exception as e:
-            print(f"[Redis] WARNING: Not reachable — TTL layer disabled. Detail: {e}")
+            print(f"[Redis] ❌ Connection failed: {e}")
+            print("[Redis] Running WITHOUT Redis (fallback mode)")
             self.redis = None
+            
 
         # IMPORTANT: ttl_classifier.joblib is a dict saved by TTLClassifier.save().
         # Must be loaded via TTLClassifier().load(), NOT joblib.load() directly.
@@ -248,6 +254,12 @@ class TriGuardCache:
         return hits
 
     def _chroma_store(self, query: str, response: str, category: str):
+        print(f"\n[CHROMA_STORE] 🚀 Attempting to store")
+        print(f"[CHROMA_STORE] query: {query}")
+        print(f"[CHROMA_STORE] category: {category}")
+        
+        before_count = self.collection.count()
+        print(f"[CHROMA_STORE] count BEFORE: {before_count}")
         self._evict_if_needed(max_entries=1000)
         with self._store_lock:
             self.collection.upsert(
@@ -308,11 +320,12 @@ class TriGuardCache:
         now = time.time()
         recent = [t for t in self._api_call_times if now - t < 60]
         rate = len(recent)
+
         if rate > 10:
-            return 0.75
+            return 0.70
         elif rate < 3:
-            return 0.85
-        return 0.80
+            return 0.80
+        return 0.75
 
     def _evict_if_needed(self, max_entries: int = 1000):
         count = self.collection.count()
@@ -327,37 +340,39 @@ class TriGuardCache:
         print(f"[Eviction] Removed {len(ids_to_remove)} oldest entries")
 
     def verify_answer_relevance(self, query: str, response: str) -> float:
-        return float(self.reranker.predict([[query, response[:512]]]))
+        return float(self.reranker.predict([[query, response[:512]]])[0])
 
-    def call_gemini(self, query: str , history: Optional[List[Message]] = None) -> str:
+    def call_gemini(self, query: str, history: Optional[List[Message]] = None) -> str:
         try:
             self._api_call_times.append(time.time())
-            content = []
-
-            if history: 
-                for msg in history:
-                    content.append({
-                        "role": "user",
-                        "parts": [{"text": msg.query}]
-                    })
-                    content.append({
-                        "role": "model",
-                        "parts": [{"text": msg.response}]
-                    })
-            content.append({
-                "role": "user",
-                "parts": [{"text": query}]
-            })
-            response = client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=content,
+            load_dotenv(override=True)
+            
+            current_client = OpenAI(
+                api_key=os.environ.get("VOCAREUM_API_KEY"),
+                base_url="https://genai.vocareum.com/v1"  # adjust if needed
             )
-            return response.text
+            
+            messages = []
+
+            if history:
+                for msg in history:
+                    messages.append({"role": "user", "content": msg.query})
+                    messages.append({"role": "assistant", "content": msg.response})
+            
+            messages.append({"role": "user", "content": query})
+
+            response = current_client.chat.completions.create(
+                model="@azure-1/gpt-4o",
+                messages=messages,
+            )
+            
+            return response.choices[0].message.content
+        
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     # ─────────────────────────────────────────────────────────────────
     # GATE 3
-    # ─────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────
     async def _gate3_and_store(self, query: str, response: str, category: str):
         """
         Runs in the background after the user already received their response.
@@ -400,170 +415,106 @@ class TriGuardCache:
         if not history:
             return []
         return history[-max_turns:]
+
     async def ask(self, query: str, history: List[Message] = None) -> dict:
-        """
-        FIX 1 (critical): TTL classification runs FIRST, before any cache
-        lookup. Volatile queries bypass ChromaDB entirely — they must
-        never return a stale cached answer.
-
-        FIX 2 (critical): Gemini call is now async via ThreadPoolExecutor
-        so slow LLM calls don't block other concurrent requests.
-
-        FIX 3: PyFS removed from the fast path (sim > 0.80). At that
-        similarity level, cosine alone is sufficient — running a 500MB
-        NLI model on top adds 200ms with no meaningful accuracy gain.
-        PyFS is retained for the lower-confidence full path only.
-        """ 
         t_start = time.perf_counter()
 
-        # ── Gate 1: Context Normalization ────────────────────────────────────
-        
+        # Gate 1
         if history:
             history = self._trim_history(history)
             history_texts = [f"{msg.query}: {msg.response}" for msg in history]
             normalized_query = self.gate1.rewrite_query(query, history_texts)
-            print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
             if normalized_query != query:
                 print(f"[Gate1] Rewrote query: '{query}' -> '{normalized_query}'")
                 query = normalized_query
-                self.metrics["gate1_rewrites"] += 1
+                self._inc(gate1_rewrites=1)  # FIX 4: use _inc()
 
-        # ── STEP 0: Classify query FIRST ─────────────────────────────────────
-        # This must happen before any cache lookup.
-        # Volatile queries skip the cache entirely — serving a stale live
-        # price or breaking news answer is worse than a cache miss.
-        # can not parallelise
+        # Step 0: classify
         category, confidence = self.classify_query(query)
 
         if category == "Volatile":
-            # print(f"[VOLATILE] Bypassing cache — calling Gemini directly")
-            loop     = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                _executor,
-                self.call_gemini,
-                query,
-                history
-            )
+            loop = asyncio.get_running_loop()  # FIX 5: get_running_loop
+            response = await loop.run_in_executor(_executor, self.call_gemini, query, history)
             t_end = time.perf_counter()
             self._inc(volatile_bypasses=1, total_queries=1)
             return {
-                "source":     "GEMINI_VOLATILE",
-                "category":   "Volatile",
+                "source": "GEMINI_VOLATILE",
+                "category": "Volatile",
                 "confidence": round(confidence, 4),
-                "response":   response,
+                "response": response,
                 "latency_seconds": round(t_end - t_start, 4)
             }
 
-        # ── STEP 1: Redis exact-match fast path ──────────────────────────────
-        # Only reached for Static and Slow-Moving queries.
-        # Parallelise with redis lookup and embed run
-        loop = asyncio.get_event_loop()
+        # Step 1: Redis + embed in parallel
+        loop = asyncio.get_running_loop()  # FIX 5
         redis_task = loop.run_in_executor(_executor, self._redis_get, query)
-        embed_task = loop.run_in_executor(_executor , self._embed, query)
+        embed_task = loop.run_in_executor(_executor, self._embed, query)
+        redis_result, query_embedding = await asyncio.gather(redis_task, embed_task)
 
-        redis_result , query_embedding = await asyncio.gather(redis_task, embed_task)
-        
         if redis_result:
-            #print(f"[Redis HIT] Returning from exact-match cache")
             t_end = time.perf_counter()
             self._inc(redis_hits=1, total_queries=1)
-            #print(f"[DEBUG] Total latency: {t_end - t_start:.4f} seconds")
-            return {"source": "REDIS_HIT", "response": redis_result, "latency_seconds": round(t_end - t_start, 4)} 
+            return {"source": "REDIS_HIT", "response": redis_result,
+                    "latency_seconds": round(t_end - t_start, 4)}
 
-        # ── STEP 2: ChromaDB semantic search ─────────────────────────────────
+        # Step 2: ChromaDB
         hits = self._chroma_search_with_embedding(query_embedding, k=5)
-
         if hits:
-            best     = hits[0]
+            best = hits[0]
             best_sim = best["similarity"]
 
-            print(f"[DEBUG] chroma_size={self.collection.count()}  "
-                  f"best_sim={best_sim:.4f}  category={category}")
-
-            # ── FAST PATH: high cosine similarity ────────────────────────────
-            # FIX: PyFS removed here. Cosine > 0.80 + correct category from
-            # classifier is sufficient confidence. Saves 200ms per cache hit.
-            if best_sim > self._dynamic_threshold():
-                print(f"[DEBUG] Fast path hit — sim={best_sim:.4f} > {self.embedding_threshold}")
+            # Fast path
+            if best_sim > self._dynamic_threshold():  # FIX 1: now returns 0.75 not 75
                 self._redis_set(query, best["response"], best["category"])
                 t_end = time.perf_counter()
-                print(f"[DEBUG] Total latency: {t_end - t_start:.4f} seconds")
                 self._inc(chroma_hits_fast=1, total_queries=1)
                 return {
-                    "source":     "CACHE_HIT_FAST",
+                    "source": "CACHE_HIT_FAST",
                     "similarity": round(best_sim, 4),
-                    "category":   best["category"],
-                    "response":   best["response"],
+                    "category": best["category"],
+                    "response": best["response"],
                     "latency_seconds": round(t_end - t_start, 4)
                 }
 
-            # ── FULL PATH: rerank + PyFS + answer relevance ───────────────────
-            # Used when cosine is promising but below the high-confidence threshold.
+            # Full path
             best_hit, rerank_score = self.rerank_candidates(query, hits)
-
             if best_hit and rerank_score > self.rerank_threshold:
-
-                #parallelise
-                pyfs_task = loop.run_in_executor(_executor, self.verifier.calculate_pyfs, query, best_hit["query"])
-                ans_task  = loop.run_in_executor(_executor, self.verify_answer_relevance, query, best_hit["response"])
-
+                pyfs_task = loop.run_in_executor(_executor, self.verifier.calculate_pyfs,
+                                                query, best_hit["query"])
+                ans_task  = loop.run_in_executor(_executor, self.verify_answer_relevance,
+                                                query, best_hit["response"])
                 pyfs_res, ans_score = await asyncio.gather(pyfs_task, ans_task)
-                
-                #print(f"[DEBUG] PyFS mu={pyfs_res['mu']:.4f}  nu={pyfs_res['nu']:.4f}")
 
-                if pyfs_res["nu"] <= self.contradiction_threshold and ans_score > self.answer_relevance_threshold:
+                if pyfs_res["nu"] <= self.contradiction_threshold \
+                        and ans_score > self.answer_relevance_threshold:
+                    self._redis_set(query, best_hit["response"], best_hit["category"])
+                    t_end = time.perf_counter()
+                    self._inc(chroma_hits_verified=1, total_queries=1)  # FIX 2: use _inc()
+                    return {
+                        "source": "CACHE_HIT_VERIFIED",
+                        "rerank_score": round(rerank_score, 4),
+                        "answer_relevance": round(ans_score, 4),
+                        "mu": round(pyfs_res["mu"], 4),
+                        "nu": round(pyfs_res["nu"], 4),
+                        "pi": round(pyfs_res["pi"], 4),
+                        "response": best_hit["response"],
+                        "latency_seconds": round(t_end - t_start, 4)
+                    }
 
-                    #ans_score = self.verify_answer_relevance(query, best_hit["response"])
-
-                    #if ans_score > self.answer_relevance_threshold:
-                        self._redis_set(query, best_hit["response"], best_hit["category"])
-                        t_end = time.perf_counter()
-                        self.metrics["chroma_hits_verified"] += 1
-                        self.metrics["total_queries"] += 1
-                        return {
-                            "source":           "CACHE_HIT_VERIFIED",
-                            "rerank_score":     round(rerank_score, 4),
-                            "answer_relevance": round(ans_score, 4),
-                            "mu":               round(pyfs_res["mu"], 4),
-                            "nu":               round(pyfs_res["nu"], 4),
-                            "pi":               round(pyfs_res["pi"], 4),
-                            "response":         best_hit["response"],
-                            "latency_seconds": round(t_end - t_start, 4)
-                        }
-                    
-                #else:
-                #    print(f"[DEBUG] PyFS contradiction gate FAILED (nu={res['nu']:.4f})")
-
-        # ── STEP 3: Cache miss — call Gemini asynchronously ──────────────────
+        # Step 3: Gemini
         print(f"[MISS] Calling Gemini (category={category})")
         gemini_start = time.perf_counter()
-        loop     = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            _executor,
-            self.call_gemini,
-            query,
-            history
-        )
+        response = await loop.run_in_executor(_executor, self.call_gemini, query, history)
         end = time.perf_counter()
-        latency  = end - t_start
-        api_call_latency = end - gemini_start
-
 
         asyncio.create_task(self._gate3_and_store(query, response, category))
-
-        # ── STEP 4: Gate 3 — store only if classifier is confident ───────────
-        # Admits the data irrespective of the confidence score now 
-        
-        # self._chroma_store(query, response, category)
-        # self._redis_set(query, response, category)
-        # print(f"[CACHED] category={category}  conf={confidence:.1%}  latency={latency:.3f}s")
         self._inc(gemini_calls=1, total_queries=1)
 
         return {
-            "source":          "GEMINI_API",
-            "latency_seconds": round(latency, 4),
-            "category":        category,
-            "confidence":      round(confidence, 4),
-            "response":        response,
-            "api_call_latency": round(api_call_latency, 4)
+            "source": "GEMINI_API",
+            "latency_seconds": round(end - t_start, 4),
+            "category": category,
+            "confidence": round(confidence, 4),
+            "response": response,
+            "api_call_latency": round(end - gemini_start, 4)
         }

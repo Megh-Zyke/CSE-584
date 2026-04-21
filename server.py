@@ -42,6 +42,7 @@ client = genai.Client(api_key=API_KEY)
 app = FastAPI(
     title="Tri-Guard Semantic Cache API",
     version="5.0",
+    root_path="https://greatlakes.arc-ts.umich.edu/rnode/gl1250.arc-ts.umich.edu/2739/proxy/8000/"  
 )
 
 app.add_middleware(

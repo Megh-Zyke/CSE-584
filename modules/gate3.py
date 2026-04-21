@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5:1.5b"
+OLLAMA_MODEL = "qwen2.5:3b"
 CONFIDENCE_PROMPT = """You are a cache quality evaluator.
 
 Query: "{query}"
@@ -103,7 +103,7 @@ class Gate3:
                     "stream": False,
                     "options": {"temperature": 0.0},
                 },
-                timeout=10,  # reduced timeout
+                timeout=30,  # reduced timeout
             )
             resp.raise_for_status()
 
@@ -192,3 +192,33 @@ class Gate3:
     # ── Sync wrapper ──────────────────────────────────────────────────────────
     def check(self, query: str, response: str):
         return asyncio.run(self.check_async(query, response))
+
+if __name__ == "__main__":
+    gate = Gate3(threshold=0.75)
+
+    # Test cases
+    test_cases = [
+        {
+            "query": "What is the capital of France?",
+            "response": "The capital of France is Paris."
+        },
+        {
+            "query": "Explain quantum computing",
+            "response": "It depends on what aspect you are interested in. Could you clarify?"
+        },
+        {
+            "query": "Who won the FIFA World Cup 2018?",
+            "response": "France won the FIFA World Cup in 2018."
+        },
+    ]
+
+    for i, case in enumerate(test_cases, 1):
+        print(f"\n=== Test Case {i} ===")
+        print(f"Query: {case['query']}")
+        print(f"Response: {case['response']}")
+
+        result = gate.check(case["query"], case["response"])
+
+        print("\nResult:")
+        for k, v in result.items():
+            print(f"{k}: {v}")

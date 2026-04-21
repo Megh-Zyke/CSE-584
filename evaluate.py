@@ -16,6 +16,13 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 load_dotenv()
+import logging
+
+logging.basicConfig(
+    filename="evaluation.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
 
 API_KEYS = [
     os.environ.get("GOOGLE_API_KEY"),
@@ -26,12 +33,18 @@ API_KEYS = [
     os.environ.get("GOOGLE_API_KEY_6"),
 ]
 API_KEYS = [k for k in API_KEYS if k]  # remove empty ones
-current_key_idx = 0
+
 
 BASE_URL = "http://localhost:8000"
+current_key_idx = 0
 
 def ask(query: str, retry_count: int = 0) -> dict:
     global current_key_idx
+
+    if retry_count > 10:
+        logging.error(f"[FAILED] Max retries exceeded for: {query[:50]}")
+        return {"source": "ERROR", "error": "max_retries_exceeded", "latency_seconds": 0}
+
     try:
         response = requests.post(
             f"{BASE_URL}/ask",
@@ -51,27 +64,57 @@ def ask(query: str, retry_count: int = 0) -> dict:
                     with open(".env", "w") as f:
                         f.write(env)
                     print(f"  [KEY] Switched to API key {current_key_idx + 1}/{len(API_KEYS)}")
-                    time.sleep(5)
-                    return ask(query, retry_count)
+                    time.sleep(60)
+                    return ask(query, 0)
                 else:
-                    print("  [KEY] All API keys exhausted!")
+                    print(" [KEY] All API keys exhausted!")
                     return {"source": "ERROR", "error": "all_keys_exhausted", "latency_seconds": 0}
             if "503" in str(body) and retry_count < 3:
                 wait = 15 * (retry_count + 1)
                 print(f"  [503] waiting {wait}s...")
                 time.sleep(wait)
                 return ask(query, retry_count + 1)
-        return response.json()
-    except Exception as e:
-        return {"source": "ERROR", "error": str(e), "latency_seconds": 0}
 
+        result = response.json()
+
+        # ← THIS is the fix: server returned ERROR in the body
+        if result.get("source") == "ERROR":
+            print(f"  [ERROR] Server returned error: {result.get('error', '?')} — retrying in 10s (attempt {retry_count + 1})")
+            logging.warning(f"[RETRY] attempt={retry_count + 1} query={query[:50]} error={result.get('error')}")
+            time.sleep(10)
+            return ask(query, retry_count + 1)
+
+        return result
+
+    except Exception as e:
+        print(f"  [ERROR] {str(e)} — retrying in 10s (attempt {retry_count + 1})")
+        logging.warning(f"[RETRY] attempt={retry_count + 1} query={query[:50]} error={str(e)}")
+        time.sleep(10)
+        return ask(query, retry_count + 1)
+    
 def get_stats() -> dict:
     try:
         return requests.get(f"{BASE_URL}/stats").json()
     except:
         return {}
 
+def save_checkpoint(results, prefix="checkpoint"):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    df = pd.DataFrame(results)
+    csv_path = f"{prefix}_{timestamp}.csv"
+    json_path = f"{prefix}_{timestamp}.json"
+
+    df.to_csv(csv_path, index=False)
+
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    logging.info(f"[CHECKPOINT] Saved {len(results)} entries → {csv_path}, {json_path}")
+    print(f"💾 Checkpoint saved ({len(results)} entries)")
+
 def run_evaluation():
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     print("=" * 60)
     print("TRI-GUARD EVALUATION — All Three Gates")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -89,17 +132,19 @@ def run_evaluation():
     print(f"\nCategory distribution:")
     print(df["Temporal_Category"].value_counts())
 
+    # last_checkpoint_time_p1 = time.time()
     # ── Phase 1: Cache population (first 500) ─────────────────
     print("\n" + "=" * 60)
     print("PHASE 1 — Populating cache with 500 queries")
     print("=" * 60)
 
-    train_df = df.head(100)
+    train_df = pd.read_csv("triaguard_cache_set.csv")
     phase1_results = []
 
     for i, row in train_df.iterrows():
-        query = row["Question"]
-        true_category = row["Temporal_Category"]
+        query = row["query"]
+        true_category = row["primary_category"]
+        print(f"{query}")
         result = ask(query)
         source = result.get("source", "ERROR")
         phase1_results.append({
@@ -108,8 +153,8 @@ def run_evaluation():
             "source": source,
             "latency": result.get("latency_seconds", 0)
         })
-        if i % 10 == 0:
-            print(f"  [{i}/100] {source} — {query[:40]}...")
+  
+        print(f"  [{i}/100] {source} — {query[:40]}...")
         time.sleep(7)
 
     stats_after_p1 = get_stats()
@@ -119,19 +164,26 @@ def run_evaluation():
     print(f"  Redis keys: {stats_after_p1.get('redis_keys', 0)}")
     print(f"  Gate3 admitted: {p1_metrics.get('gate3_admitted', 'N/A')}")
     print(f"  Gate3 blocked: {p1_metrics.get('gate3_blocked', 'N/A')}")
+    pd.DataFrame(phase1_results).to_csv(f"phase1_results_{timestamp}.csv", index=False)
+    #if time.time() - last_checkpoint_time_p1 >= CHECKPOINT_INTERVAL:
+    #     save_checkpoint(phase1_results, prefix="phase1_checkpoint")
+    #     last_checkpoint_time_p1 = time.time()
 
+    # last_checkpoint_time = time.time()
+    # CHECKPOINT_INTERVAL = 55 * 60  # 55 minutes
     # ── Phase 2: Test queries (next 500) ──────────────────────
     print("\n" + "=" * 60)
     print("PHASE 2 — Running 500 test queries")
     print("=" * 60)
 
-    test_df = df.iloc[100:200]
+    test_df = pd.read_csv("triaguard_test_set.csv")
     results = []
 
     for i, row in test_df.iterrows():
-        query = row["Question"]
-        true_category = row["Temporal_Category"]
+        query = row["query"]
+        true_category = row["primary_category"]
         result = ask(query)
+
         source = result.get("source", "ERROR")
         predicted_category = result.get("category", "Unknown")
         latency = result.get("latency_seconds", 0)
@@ -147,10 +199,20 @@ def run_evaluation():
             "cache_hit": source in ["REDIS_HIT", "CACHE_HIT_FAST", "CACHE_HIT_VERIFIED"],
             "volatile_bypass": source == "GEMINI_VOLATILE",
             "gemini_call": source == "GEMINI_API",
+            "timestamp": datetime.now().isoformat(),
+            "api_call_latency": result.get("api_call_latency", 0),
+            "similarity": result.get("similarity", 0),
+            "gate3_confidence": result.get("confidence", 0),
+            "cached_response": result.get("response", ""),          
+            "ground_truth": row.get("ground_truth_2026", "")
         })
+        # current_time = time.time()
+        # if current_time - last_checkpoint_time >= CHECKPOINT_INTERVAL:
+        #     save_checkpoint(results, prefix="phase2_checkpoint")
+        #     last_checkpoint_time = current_time
 
-        if (i - 100) % 10 == 0:
-            print(f"  [{i-100}/100] {source} — {latency:.3f}s — {true_category}")
+        
+        print(f"  [{i-100}/100] {source} — {latency:.3f}s — {true_category}")
 
         time.sleep(7)
 
@@ -250,8 +312,8 @@ def run_evaluation():
     print(f"{'Cache Hit Latency':<35} {'~100ms':<20} {cache_latency*1000:.0f}ms")
     print(f"{'Category Accuracy':<35} {'N/A':<20} {category_accuracy:.1f}%")
 
-    # ── Save results ──────────────────────────────────────────
-    results_df.to_csv("evaluation_results.csv", index=False)
+    # ── Save results ─────────────────────────────────────────
+    results_df.to_csv(f"evaluation_results_{timestamp}.csv", index=False)
 
     summary = {
         "timestamp": datetime.now().isoformat(),
@@ -276,12 +338,58 @@ def run_evaluation():
         "source_breakdown": results_df["source"].value_counts().to_dict()
     }
 
-    with open("evaluation_summary.json", "w") as f:
+    with open(f"evaluation_summary_{timestamp}.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     print(f"\n✅ Saved: evaluation_results.csv")
     print(f"✅ Saved: evaluation_summary.json")
     print(f"\nCompleted: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    # ── Gate 4: Wrong Cache Hit Detection ─────────────────────────
+    from sentence_transformers import SentenceTransformer, util
 
+    print("\n── WRONG CACHE HIT ANALYSIS ──────────────────────────────")
+    sim_model = SentenceTransformer("all-MiniLM-L6-v2")  # lightweight, fast
+
+    WRONG_HIT_THRESHOLD = 0.70  # tune this
+
+    cache_only = results_df[results_df["cache_hit"] == True].copy()
+    wrong_hits = []
+
+    for _, row in cache_only.iterrows():
+        gt = str(row["ground_truth"])
+        cached = str(row["cached_response"])
+        if not gt or not cached:
+            continue
+        
+        embs = sim_model.encode([gt, cached], convert_to_tensor=True)
+        sim = float(util.cos_sim(embs[0], embs[1]))
+        
+        is_wrong = sim < WRONG_HIT_THRESHOLD
+        wrong_hits.append({
+            "query": row["query"],
+            "true_category": row["true_category"],
+            "source": row["source"],
+            "similarity_to_gt": round(sim, 4),
+            "is_wrong_hit": is_wrong,
+            "ground_truth": gt[:200],
+            "cached_response": cached[:200],
+        })
+
+    wrong_df = pd.DataFrame(wrong_hits)
+    n_wrong = wrong_df["is_wrong_hit"].sum()
+    wrong_rate = n_wrong / max(1, len(wrong_df)) * 100
+
+    print(f"  Cache hits analyzed: {len(wrong_df)}")
+    print(f"  Wrong hits (sim < {WRONG_HIT_THRESHOLD}): {int(n_wrong)} ({wrong_rate:.1f}%)")
+    print(f"\n  Wrong hit breakdown by category:")
+    for cat in ["Static", "Slow-Moving", "Volatile"]:
+        cat_df = wrong_df[wrong_df["true_category"] == cat]
+        if len(cat_df):
+            w = cat_df["is_wrong_hit"].sum()
+            print(f"    {cat}: {int(w)}/{len(cat_df)} wrong ({w/len(cat_df)*100:.1f}%)")
+
+    # Save wrong hits to CSV
+    wrong_df.to_csv(f"wrong_cache_hits_{timestamp}.csv", index=False)
+    print(f"\n  ✅ Saved wrong_cache_hits_{timestamp}.csv")
 if __name__ == "__main__":
     run_evaluation()

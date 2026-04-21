@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-04-20T00:37:29.097249",
+  "total_queries_tested": 200,
+  "metrics": {
+    "effective_hit_rate_percent": 32.5,
+    "api_reduction_percent": 57.5,
+    "staleness_rate_percent": 36.96,
+    "cache_integrity": 6.67,
+    "ttl_category_accuracy_percent": 71.86,
+    "cache_hit_latency_ms": 87.6,
+    "gemini_latency_ms": 9271.95,
+    "speedup_factor": 105.8
+  },
+  "gate3": {
+    "admitted": 98,
+    "blocked": 7,
+    "total": 105
+  },
+  "source_breakdown": {
+    "GEMINI_API": 85,
+    "CACHE_HIT_FAST": 64,
+    "GEMINI_VOLATILE": 50,
+    "REDIS_HIT": 1
+  }
+}
