@@ -1,0 +1,192 @@
+TriGuard Semantic Cache — Installation Instructions
+CSE 584, University of Michigan
+====================================================
+
+SYSTEM REQUIREMENTS
+-------------------
+- Python 3.10 or higher
+- CUDA-capable GPU recommended (evaluated on A100 40GB via Great Lakes)
+- CPU-only mode is supported but Gate 3 (Ollama/Qwen) will be slow
+- Redis server
+- Ollama (for Gate 3 SLM judge)
+
+------------------------------------------------------------
+STEP 1: Clone / Extract the Source
+------------------------------------------------------------
+Unzip the submitted archive:
+
+    unzip CSE-584-main.zip
+    cd CSE-584-main
+
+------------------------------------------------------------
+STEP 2: Create a Python Virtual Environment (Recommended)
+------------------------------------------------------------
+
+    python3 -m venv venv
+    source venv/bin/activate          # Linux / macOS
+    # or: venv\Scripts\activate       # Windows
+
+------------------------------------------------------------
+STEP 3: Install Python Dependencies
+------------------------------------------------------------
+All required packages are pinned in requirements.txt:
+
+    pip install --upgrade pip
+    pip install -r requirements.txt
+
+The packages installed are:
+    torch==2.10.0
+    transformers==4.57.6
+    sentence-transformers==5.2.3
+    scikit-learn==1.8.0
+    joblib==1.5.3
+    numpy==2.4.2
+    pandas==3.0.1
+    fastapi==0.128.4
+    uvicorn==0.40.0
+    pydantic==2.12.5
+    chromadb==1.5.5
+    redis==7.3.0
+    google-genai>=0.8.0
+    python-dotenv==1.2.1
+    ollama>=0.4.0
+    sentencepiece==0.2.1
+
+NOTE: On Great Lakes HPC, load the appropriate CUDA module before
+installing torch if GPU acceleration is desired:
+    module load python/3.10
+    module load cuda/11.8
+
+------------------------------------------------------------
+STEP 4: Install and Start Redis
+------------------------------------------------------------
+Redis is used as the Level-1 exact-match cache.
+
+On Ubuntu/Debian:
+    sudo apt-get install redis-server
+
+On macOS (Homebrew):
+    brew install redis
+
+On Great Lakes (no sudo):
+    module load redis   # if available, otherwise use conda
+    # or run a local instance:
+    redis-server --port 6379 --bind 127.0.0.1 --daemonize yes
+
+Verify Redis is running:
+    redis-cli ping
+    # Expected output: PONG
+
+------------------------------------------------------------
+STEP 5: Install Ollama and Pull the Gate 3 Model
+------------------------------------------------------------
+Ollama is required for Gate 3 (the async SLM judge).
+
+Install Ollama:
+    curl -fsSL https://ollama.com/install.sh | sh
+
+On Great Lakes (module-based):
+    module load ollama
+
+Pull the required model (qwen2.5:1.5b):
+    ollama pull qwen2.5:1.5b
+
+Start the Ollama server:
+    ollama serve &
+
+Verify Ollama is running:
+    curl http://localhost:11434/api/tags
+    # Should list qwen2.5:1.5b in the response
+
+NOTE: If Ollama is unavailable, Gate 3 will log errors and default
+to admitting all responses. The cache will still function but without
+SLM quality filtering.
+
+------------------------------------------------------------
+STEP 6: Configure Environment Variables
+------------------------------------------------------------
+Create a .env file in the project root directory:
+
+    touch .env
+
+Add the following variables to .env:
+
+    VOCAREUM_API_KEY=<your_vocareum_api_key>
+    GOOGLE_API_KEY=<your_google_api_key>
+    REDIS_HOST=127.0.0.1
+    REDIS_PORT=6379
+
+VOCAREUM_API_KEY: Required. Used to call GPT-4o via the Vocareum
+academic gateway (https://genai.vocareum.com/v1, model @azure-1/gpt-4o).
+This is the LLM backend for cache misses.
+
+GOOGLE_API_KEY: Used by the google-genai client initialized in
+server.py and trigaurd.py. Can be set to a placeholder if only
+using the Vocareum endpoint.
+
+REDIS_HOST / REDIS_PORT: Optional. Defaults to 127.0.0.1:6379.
+Override if Redis is running on a different host or port.
+
+------------------------------------------------------------
+STEP 7: Verify the Pre-trained TTL Classifier
+------------------------------------------------------------
+The TTL classifier is pre-trained and saved as ttl_classifier.joblib
+in the project root. No retraining is needed to run the server.
+
+To verify it loads correctly:
+    python3 -c "
+    from modules.dynamic_ttl_training import TTLClassifier
+    clf = TTLClassifier()
+    clf.load('ttl_classifier.joblib')
+    print('Classifier loaded. Classes:', clf._classes)
+    result = clf.predict('What is the speed of light?')
+    print(result)
+    "
+
+Expected output: Label=Static, TTL=7 days, Confidence > 0.8
+
+To retrain from scratch (optional):
+    python3 modules/dynamic_ttl_training.py \
+        --train datasets/synthetic_ttl_training_dataset.xlsx
+
+------------------------------------------------------------
+STEP 8: Start the TriGuard Server
+------------------------------------------------------------
+
+    python3 server.py
+
+The server starts at: http://localhost:8000
+
+Verify it is running:
+    curl http://localhost:8000/health
+
+Expected output includes:
+    {"status": "ok", "ttl_classifier": true, "redis": true, ...}
+
+------------------------------------------------------------
+STEP 9: Run the Evaluation (Optional)
+------------------------------------------------------------
+To reproduce the evaluation results:
+
+    python3 evaluate.py
+
+This runs a two-phase evaluation:
+  Phase 1: Populates the cache with 150 queries from triaguard_cache_set.csv
+  Phase 2: Tests 200 queries from triaguard_test_set.csv
+
+Results are saved as:
+  evaluation_results_<timestamp>.csv
+  evaluation_summary_<timestamp>.json
+  wrong_cache_hits_<timestamp>.csv
+
+NOTE: The evaluation requires the VOCAREUM_API_KEY to be set and
+calls the GPT-4o API approximately 170-180 times. Each call costs
+API credits. The full evaluation takes approximately 30-45 minutes
+due to per-query sleep delays (7 seconds) to avoid rate limiting.
+
+Pre-computed evaluation results from our run (April 19, 2026) are
+included in the submission:
+  evaluation_results_20260419_231439.csv
+  evaluation_summary_20260419_231439.json
+  wrong_cache_hits_20260419_231439.csv
+
